@@ -200,6 +200,8 @@ export class LighterGateway {
   private loggedCreateOrderPayload = false;
   private readonly logTxInfo: boolean;
   private readonly primaryApiKeyIndex: number;
+  private lastNonceRefreshAt = 0;
+  private orderChain: Promise<void> = Promise.resolve();
   private lastWsPositionUpdateAt = 0;
   private readonly lastWsPositionByMarket = new Map<number, number>();
   private httpPositionsEmptyLogged = false;
@@ -357,13 +359,15 @@ export class LighterGateway {
   }
 
   async createOrder(params: CreateOrderParams): Promise<AsterOrder> {
-    await this.ensureInitialized();
-    const conversion = this.mapCreateOrderParams(params);
-    const { baseAmountScaledString, priceScaledString, triggerPriceScaledString, ...signParams } = conversion;
+    const run = async (): Promise<AsterOrder> => {
+      await this.ensureInitialized();
+      const conversion = this.mapCreateOrderParams(params);
+      const { baseAmountScaledString, priceScaledString, triggerPriceScaledString, ...signParams } = conversion;
 
-    const maxAttempts = 3;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const { apiKeyIndex, nonce } =
+      const apiKeyIndex =
+        this.primaryApiKeyIndex != null ? this.primaryApiKeyIndex : this.apiKeyIndices[0] ?? 0;
+      await this.refreshNonceForOrder(apiKeyIndex);
+      const { nonce } =
         this.primaryApiKeyIndex != null ? this.nonceManager.nextFor(this.primaryApiKeyIndex) : this.nonceManager.next();
       try {
         const signed = await this.signer.signCreateOrder({
@@ -404,14 +408,20 @@ export class LighterGateway {
       } catch (error) {
         this.nonceManager.acknowledgeFailure(apiKeyIndex);
         if (isInvalidNonce(error)) {
-          await this.nonceManager.refresh(apiKeyIndex).catch((err) => this.logger("nonce.refresh", err));
-          continue; // retry with freshly synced nonce
+          await this.refreshNonceThrottle(apiKeyIndex);
         }
         this.logger("createOrder", error);
         throw error;
       }
-    }
-    throw new Error("Failed to create order after refreshing nonce");
+    };
+
+    // serialize order creation to avoid concurrent nonce consumption
+    const chain = this.orderChain.then(run, run);
+    this.orderChain = chain.then(
+      () => undefined,
+      () => undefined
+    );
+    return chain;
   }
 
   async cancelOrder(params: { marketIndex?: number; orderId: number | string; apiKeyIndex?: number }): Promise<void> {
@@ -770,6 +780,25 @@ export class LighterGateway {
     this.auth.token = token;
     this.auth.expiresAt = deadline;
     return token;
+  }
+
+  private async refreshNonceForOrder(apiKeyIndex: number): Promise<void> {
+    try {
+      await this.nonceManager.refresh(apiKeyIndex);
+      this.lastNonceRefreshAt = Date.now();
+    } catch (error) {
+      // Swallow refresh errors to avoid blocking order flow; real send will surface issues
+      this.logger("nonce.refresh.order", error);
+    }
+  }
+
+  private async refreshNonceThrottle(apiKeyIndex: number): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastNonceRefreshAt < 1500) {
+      return; // avoid spamming nextNonce; let next cycle try again
+    }
+    this.lastNonceRefreshAt = now;
+    await this.nonceManager.refresh(apiKeyIndex);
   }
 
   private async dispatchTransaction(
