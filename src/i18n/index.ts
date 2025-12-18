@@ -229,8 +229,8 @@ const translations: Record<string, TranslationEntry> = {
   "grid.direction.long": { zh: "多", en: "Long" },
   "grid.direction.short": { zh: "空", en: "Short" },
   "basis.onlyAster": {
-    zh: "期现套利策略目前仅支持 Aster 交易所。请设置 EXCHANGE=aster 后重试。",
-    en: "Basis arbitrage currently supports only Aster. Set EXCHANGE=aster and retry.",
+    zh: "期现套利策略目前仅支持 Aster / Nado 交易所。请设置 EXCHANGE=aster 或 EXCHANGE=nado 后重试。",
+    en: "Basis arbitrage currently supports only Aster and Nado. Set EXCHANGE=aster or EXCHANGE=nado and retry.",
   },
   "basis.startFailed": {
     zh: "无法启动期现套利策略: {message}",
@@ -325,6 +325,18 @@ const translations: Record<string, TranslationEntry> = {
   "env.invalidParadexAddress": {
     zh: "PARADEX_WALLET_ADDRESS 必须是有效的 0x 开头 40 字节十六进制地址",
     en: "PARADEX_WALLET_ADDRESS must be a valid 0x-prefixed 40-byte hex address",
+  },
+  "env.missingNado": {
+    zh: "Nado 需要配置 NADO_SIGNER_PRIVATE_KEY 与 NADO_SUBACCOUNT_OWNER (或 NADO_EVM_ADDRESS)",
+    en: "Nado requires NADO_SIGNER_PRIVATE_KEY and NADO_SUBACCOUNT_OWNER (or NADO_EVM_ADDRESS)",
+  },
+  "env.invalidNadoPrivateKey": {
+    zh: "NADO_SIGNER_PRIVATE_KEY 必须是 0x 开头的 32 字节十六进制字符串",
+    en: "NADO_SIGNER_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string",
+  },
+  "env.invalidNadoAddress": {
+    zh: "NADO_SUBACCOUNT_OWNER / NADO_EVM_ADDRESS 必须是有效的 0x 开头 40 字节十六进制地址",
+    en: "NADO_SUBACCOUNT_OWNER / NADO_EVM_ADDRESS must be a valid 0x-prefixed 40-byte hex address",
   },
   "log.subscribe.accountFail": {
     zh: "订阅账户失败: {error}",
@@ -430,6 +442,14 @@ const translations: Record<string, TranslationEntry> = {
     zh: "处理期货深度异常: {error}",
     en: "Error processing futures depth: {error}",
   },
+  "log.basis.subscribeSpotDepthFail": {
+    zh: "订阅现货深度失败: {error}",
+    en: "Failed to subscribe spot depth: {error}",
+  },
+  "log.basis.processSpotDepthError": {
+    zh: "处理现货深度异常: {error}",
+    en: "Error processing spot depth: {error}",
+  },
   "log.basis.futuresReady": {
     zh: "期货深度已就绪 ({symbol})",
     en: "Futures depth ready ({symbol})",
@@ -438,6 +458,14 @@ const translations: Record<string, TranslationEntry> = {
     zh: "获取现货盘口失败: {error}",
     en: "Failed to fetch spot orderbook: {error}",
   },
+  "log.basis.subscribeFundingRateFail": {
+    zh: "订阅资金费率失败: {error}",
+    en: "Failed to subscribe funding rate: {error}",
+  },
+  "log.basis.processFundingRateError": {
+    zh: "处理资金费率异常: {error}",
+    en: "Error processing funding rate: {error}",
+  },
   "log.basis.fundingReady": {
     zh: "资金费率已就绪 ({symbol})",
     en: "Funding rate ready ({symbol})",
@@ -445,6 +473,14 @@ const translations: Record<string, TranslationEntry> = {
   "log.basis.fundingError": {
     zh: "获取资金费率失败: {error}",
     en: "Failed to fetch funding rate: {error}",
+  },
+  "log.basis.subscribeAccountFail": {
+    zh: "订阅账户快照失败: {error}",
+    en: "Failed to subscribe account snapshot: {error}",
+  },
+  "log.basis.processAccountError": {
+    zh: "处理账户快照异常: {error}",
+    en: "Error processing account snapshot: {error}",
   },
   "log.basis.spotBalanceError": {
     zh: "获取现货余额失败: {error}",

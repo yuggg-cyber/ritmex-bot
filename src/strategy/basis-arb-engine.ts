@@ -1,6 +1,6 @@
 import type { BasisArbConfig } from "../config";
-import type { ExchangeAdapter } from "../exchanges/adapter";
-import type { AsterDepth, AsterSpotBookTicker } from "../exchanges/types";
+import type { ExchangeAdapter, FundingRateSnapshot } from "../exchanges/adapter";
+import type { AsterAccountSnapshot, AsterDepth, AsterSpotBookTicker } from "../exchanges/types";
 import { AsterSpotRestClient, AsterRestClient } from "../exchanges/aster/client";
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { StrategyEventEmitter } from "./common/event-emitter";
@@ -82,8 +82,8 @@ interface FuturesBalanceStateEntry {
 export class BasisArbEngine {
   private readonly events = new StrategyEventEmitter<BasisArbEvent, BasisArbSnapshot>();
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
-  private readonly spotClient: Pick<AsterSpotRestClient, "getBookTicker">;
-  private readonly futuresClient: Pick<AsterRestClient, "getPremiumIndex">;
+  private readonly spotClient: Pick<AsterSpotRestClient, "getBookTicker"> | null;
+  private readonly futuresClient: Pick<AsterRestClient, "getPremiumIndex"> | null;
   private readonly now: () => number;
   private readonly config: BasisArbConfig;
   private readonly exchange: ExchangeAdapter;
@@ -109,8 +109,9 @@ export class BasisArbEngine {
   constructor(config: BasisArbConfig, exchange: ExchangeAdapter, deps: BasisArbDependencies = {}) {
     this.config = config;
     this.exchange = exchange;
-    this.spotClient = deps.spotClient ?? new AsterSpotRestClient();
-    this.futuresClient = deps.futuresClient ?? new AsterRestClient();
+    const isAster = exchange.id === "aster";
+    this.spotClient = deps.spotClient ?? (isAster ? new AsterSpotRestClient() : null);
+    this.futuresClient = deps.futuresClient ?? (isAster ? new AsterRestClient() : null);
     this.now = deps.now ?? (() => Date.now());
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
     this.bootstrap();
@@ -118,6 +119,7 @@ export class BasisArbEngine {
 
   start(): void {
     if (this.timer) return;
+    if (this.exchange.id !== "aster") return;
     this.timer = setInterval(() => {
       void this.pollSpot();
       void this.pollFunding();
@@ -164,6 +166,48 @@ export class BasisArbEngine {
         processFail: (error) => t("log.basis.processFuturesDepthError", { error: String(error) }),
       }
     );
+
+    if (this.exchange.id === "nado") {
+      safeSubscribe<AsterDepth>(
+        this.exchange.watchDepth.bind(this.exchange, this.config.spotSymbol),
+        (depth) => {
+          this.applySpotDepth(depth);
+        },
+        log,
+        {
+          subscribeFail: (error) => t("log.basis.subscribeSpotDepthFail", { error: String(error) }),
+          processFail: (error) => t("log.basis.processSpotDepthError", { error: String(error) }),
+        }
+      );
+
+      if (typeof this.exchange.watchFundingRate === "function") {
+        safeSubscribe<FundingRateSnapshot>(
+          (cb) => {
+            this.exchange.watchFundingRate?.(this.config.futuresSymbol, cb);
+          },
+          (snapshot) => {
+            this.applyFundingRateSnapshot(snapshot);
+          },
+          log,
+          {
+            subscribeFail: (error) => t("log.basis.subscribeFundingRateFail", { error: String(error) }),
+            processFail: (error) => t("log.basis.processFundingRateError", { error: String(error) }),
+          }
+        );
+      }
+
+      safeSubscribe<AsterAccountSnapshot>(
+        this.exchange.watchAccount.bind(this.exchange),
+        (snapshot) => {
+          this.applyAccountSnapshot(snapshot);
+        },
+        log,
+        {
+          subscribeFail: (error) => t("log.basis.subscribeAccountFail", { error: String(error) }),
+          processFail: (error) => t("log.basis.processAccountError", { error: String(error) }),
+        }
+      );
+    }
   }
 
   private applyFuturesDepth(depth: AsterDepth): void {
@@ -189,7 +233,7 @@ export class BasisArbEngine {
   }
 
   private async pollSpot(): Promise<void> {
-    if (this.spotInFlight || this.stopped) return;
+    if (!this.spotClient || this.spotInFlight || this.stopped) return;
     this.spotInFlight = true;
     try {
       const result = await this.spotClient.getBookTicker(this.config.spotSymbol);
@@ -208,7 +252,7 @@ export class BasisArbEngine {
   }
 
   private async pollFunding(): Promise<void> {
-    if (this.fundingInFlight || this.stopped) return;
+    if (!this.futuresClient || this.fundingInFlight || this.stopped) return;
     this.fundingInFlight = true;
     try {
       const data = await this.futuresClient.getPremiumIndex(this.config.futuresSymbol);
@@ -237,7 +281,7 @@ export class BasisArbEngine {
   }
 
   private async pollSpotAccount(): Promise<void> {
-    if (this.spotAccountInFlight || this.stopped) return;
+    if (!this.spotClient || this.spotAccountInFlight || this.stopped) return;
     this.spotAccountInFlight = true;
     try {
       // Spot balances via spot REST
@@ -267,7 +311,7 @@ export class BasisArbEngine {
   }
 
   private async pollFuturesAccount(): Promise<void> {
-    if (this.futuresAccountInFlight || this.stopped) return;
+    if (this.exchange.id !== "aster" || this.futuresAccountInFlight || this.stopped) return;
     this.futuresAccountInFlight = true;
     try {
       // Futures balances via futures REST
@@ -313,6 +357,70 @@ export class BasisArbEngine {
     if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
       this.marketReadyAt = this.now();
     }
+    this.emitUpdate();
+  }
+
+  private applySpotDepth(depth: AsterDepth): void {
+    if (!depth?.bids?.length || !depth?.asks?.length) {
+      return;
+    }
+    const topBid = Number(depth.bids[0]?.[0]);
+    const topAsk = Number(depth.asks[0]?.[0]);
+    if (!Number.isFinite(topBid) || !Number.isFinite(topAsk)) {
+      return;
+    }
+    this.spot.bid = topBid;
+    this.spot.ask = topAsk;
+    this.spot.updatedAt = depth.eventTime ?? depth.tradeTime ?? this.now();
+    if (!this.feedReady.spot) {
+      this.feedReady.spot = true;
+      this.tradeLog.push("info", t("log.basis.spotReady", { symbol: this.config.spotSymbol }));
+    }
+    if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
+      this.marketReadyAt = this.now();
+    }
+    this.emitUpdate();
+  }
+
+  private applyFundingRateSnapshot(snapshot: FundingRateSnapshot): void {
+    const rate = snapshot.fundingRate;
+    if (!Number.isFinite(rate)) return;
+    this.funding.rate = rate;
+    this.funding.nextFundingTime = null;
+    this.funding.updatedAt = Number.isFinite(snapshot.updateTime) ? snapshot.updateTime : this.now();
+    if (!this.feedReady.funding) {
+      this.feedReady.funding = true;
+      this.tradeLog.push("info", t("log.basis.fundingReady", { symbol: this.config.futuresSymbol }));
+    }
+    this.emitUpdate();
+  }
+
+  private applyAccountSnapshot(snapshot: AsterAccountSnapshot): void {
+    const assets = Array.isArray(snapshot.assets) ? snapshot.assets : [];
+
+    const spotBalances: SpotBalanceStateEntry[] = [];
+    const futuresBalances: FuturesBalanceStateEntry[] = [];
+
+    for (const asset of assets) {
+      const name = String(asset.asset ?? "");
+      const wallet = Number(asset.walletBalance ?? 0);
+      const available = Number(asset.availableBalance ?? 0);
+      if (!name) continue;
+      if (!Number.isFinite(wallet) || !Number.isFinite(available)) continue;
+      if (Math.abs(wallet) === 0 && Math.abs(available) === 0) continue;
+
+      if (name === "USDT0") {
+        futuresBalances.push({ asset: name, wallet, available });
+        continue;
+      }
+      const locked = Math.max(wallet - available, 0);
+      spotBalances.push({ asset: name, free: available, locked });
+    }
+
+    spotBalances.sort((a, b) => a.asset.localeCompare(b.asset));
+    futuresBalances.sort((a, b) => a.asset.localeCompare(b.asset));
+    this.spotBalances = spotBalances;
+    this.futuresBalances = futuresBalances;
     this.emitUpdate();
   }
 

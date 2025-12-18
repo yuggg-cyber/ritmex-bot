@@ -27,6 +27,16 @@ export interface KlineListener {
   (klines: AsterKline[]): void;
 }
 
+export interface FundingRateSnapshot {
+  symbol: string;
+  fundingRate: number;
+  updateTime: number;
+}
+
+export interface FundingRateListener {
+  (snapshot: FundingRateSnapshot): void;
+}
+
 export interface ExchangePrecision {
   priceTick: number;
   qtyStep: number;
@@ -45,6 +55,7 @@ export interface ExchangeAdapter {
   watchDepth(symbol: string, cb: DepthListener): void;
   watchTicker(symbol: string, cb: TickerListener): void;
   watchKlines(symbol: string, interval: string, cb: KlineListener): void;
+  watchFundingRate?(symbol: string, cb: FundingRateListener): void;
   createOrder(params: CreateOrderParams): Promise<AsterOrder>;
   cancelOrder(params: { symbol: string; orderId: number | string }): Promise<void>;
   cancelOrders(params: { symbol: string; orderIdList: Array<number | string> }): Promise<void>;

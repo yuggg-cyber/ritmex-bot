@@ -74,7 +74,7 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 
 | Variable | Purpose |
 | --- | --- |
-| `EXCHANGE` | Choose the venue (`aster` / `grvt` / `lighter` / `backpack` / `paradex`) |
+| `EXCHANGE` | Choose the venue (`aster` / `grvt` / `lighter` / `backpack` / `paradex` / `nado`) |
 | `TRADE_SYMBOL` | Contract symbol (defaults to `BTCUSDT`) |
 | `TRADE_AMOUNT` | Order size in base asset units |
 | `LOSS_LIMIT` | Max per-trade loss in USDT before forced close |
@@ -122,6 +122,12 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 2. Provide `PARADEX_PRIVATE_KEY` (EVM private key) and `PARADEX_WALLET_ADDRESS`.
 3. The adapter connects to mainnet by default; enable `PARADEX_SANDBOX=true` and adjust `PARADEX_SYMBOL` for testnet usage.
 4. Advanced tuning: use `PARADEX_USE_PRO`, `PARADEX_RECONNECT_DELAY_MS`, or debug flags as needed.
+
+### Nado
+1. Set `EXCHANGE=nado`.
+2. Provide `NADO_SIGNER_PRIVATE_KEY` (linked signer) and `NADO_SUBACCOUNT_OWNER` (or `NADO_EVM_ADDRESS`).
+3. Select network via `NADO_ENV=inkMainnet` (mainnet) or `inkTestnet` (testnet).
+4. Set `NADO_SYMBOL` (for example `BTC-PERP`; `BTCUSDT0` is also accepted and mapped to `BTC-PERP`).
 
 ## Command Cheatsheet
 ```bash

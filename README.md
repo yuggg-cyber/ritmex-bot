@@ -82,7 +82,7 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 
 | 变量 | 说明 |
 | --- | --- |
-| `EXCHANGE` | 选择交易所（`aster`/`grvt`/`lighter`/`backpack`/`paradex`） |
+| `EXCHANGE` | 选择交易所（`aster`/`grvt`/`lighter`/`backpack`/`paradex`/`nado`） |
 | `TRADE_SYMBOL` | 交易对（默认 `BTCUSDT`） |
 | `TRADE_AMOUNT` | 单笔下单数量（标的资产计） |
 | `LOSS_LIMIT` | 单笔最大亏损触发的强平额度（USDT） |
@@ -130,6 +130,12 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 2. 提供 `PARADEX_PRIVATE_KEY`（EVM 私钥）与 `PARADEX_WALLET_ADDRESS` 注意这是你EVM钱包的地址和私钥，建议创建全新钱包，不要放置无关资产。
 3. 默认连接主网，若需测试网，将 `PARADEX_SANDBOX=true` 并根据需要调整 `PARADEX_SYMBOL`。
 4. 复杂环境可额外设置 `PARADEX_USE_PRO`、`PARADEX_RECONNECT_DELAY_MS` 或调试开关。
+
+### Nado
+1. 设置 `EXCHANGE=nado`。
+2. 提供 `NADO_SIGNER_PRIVATE_KEY`（已 link 的 Signer 私钥）与 `NADO_SUBACCOUNT_OWNER`（或 `NADO_EVM_ADDRESS`）。
+3. 选择网络 `NADO_ENV=inkMainnet`（主网）或 `inkTestnet`（测试网）。
+4. 设置交易品种 `NADO_SYMBOL`（例如 `BTC-PERP`；也支持输入 `BTCUSDT0`，会自动映射为 `BTC-PERP`）。
 
 ## 命令速查
 ```bash

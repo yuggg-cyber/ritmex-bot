@@ -4,7 +4,9 @@ import type { AsterCredentials } from "./aster-adapter";
 import type { LighterCredentials } from "./lighter/adapter";
 import type { BackpackCredentials } from "./backpack/adapter";
 import type { ParadexCredentials } from "./paradex/adapter";
+import type { NadoCredentials } from "./nado/adapter";
 import { t } from "../i18n";
+import type { Address } from "viem";
 
 interface BuildAdapterOptions {
   symbol: string;
@@ -33,6 +35,11 @@ export function buildAdapterFromEnv(options: BuildAdapterOptions): ExchangeAdapt
   if (id === "paradex") {
     const credentials = resolveParadexCredentials();
     return createExchangeAdapter({ exchange: id, symbol, paradex: credentials });
+  }
+
+  if (id === "nado") {
+    const credentials = resolveNadoCredentials(symbol);
+    return createExchangeAdapter({ exchange: id, symbol, nado: credentials });
   }
 
   return createExchangeAdapter({ exchange: id, symbol, grvt: { symbol } });
@@ -110,6 +117,37 @@ function resolveParadexCredentials(): ParadexCredentials {
     sandbox: parseOptionalBoolean(process.env.PARADEX_SANDBOX),
     usePro: parseOptionalBoolean(process.env.PARADEX_USE_PRO),
     watchReconnectDelayMs: parseOptionalNumber(process.env.PARADEX_RECONNECT_DELAY_MS),
+  };
+
+  return credentials;
+}
+
+function resolveNadoCredentials(symbol: string): NadoCredentials {
+  const signerPrivateKey = process.env.NADO_SIGNER_PRIVATE_KEY;
+  const subaccountOwner = process.env.NADO_SUBACCOUNT_OWNER ?? process.env.NADO_EVM_ADDRESS;
+
+  if (!signerPrivateKey || !subaccountOwner) {
+    throw new Error(t("env.missingNado"));
+  }
+  if (!isHex32(signerPrivateKey)) {
+    throw new Error(t("env.invalidNadoPrivateKey"));
+  }
+  if (!isHexAddress(subaccountOwner)) {
+    throw new Error(t("env.invalidNadoAddress"));
+  }
+
+  const credentials: NadoCredentials = {
+    symbol: process.env.NADO_SYMBOL ?? symbol,
+    signerPrivateKey,
+    subaccountOwner: subaccountOwner as Address,
+    subaccountName: process.env.NADO_SUBACCOUNT_NAME ?? undefined,
+    env: process.env.NADO_ENV as any,
+    gatewayWsUrl: process.env.NADO_GATEWAY_WS_URL ?? undefined,
+    subscriptionsWsUrl: process.env.NADO_SUBSCRIPTIONS_WS_URL ?? undefined,
+    archiveUrl: process.env.NADO_ARCHIVE_URL ?? undefined,
+    triggerUrl: process.env.NADO_TRIGGER_URL ?? undefined,
+    marketSlippagePct: parseOptionalNumber(process.env.NADO_MARKET_SLIPPAGE_PCT),
+    stopTriggerSource: process.env.NADO_STOP_TRIGGER_SOURCE as any,
   };
 
   return credentials;
