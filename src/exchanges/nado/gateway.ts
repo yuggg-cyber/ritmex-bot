@@ -1,7 +1,7 @@
 import NodeWebSocket from "ws";
 import BigNumber from "bignumber.js";
 import { IndexerClient } from "@nadohq/indexer-client";
-import { TriggerClient } from "@nadohq/trigger-client";
+import { TriggerClient, type PriceTriggerRequirementType } from "@nadohq/trigger-client";
 import { ENGINE_WS_CLIENT_ENDPOINTS, ENGINE_WS_SUBSCRIPTION_CLIENT_ENDPOINTS } from "@nadohq/engine-client";
 import type { ChainEnv, WalletClientWithAccount } from "@nadohq/shared";
 import {
@@ -12,7 +12,8 @@ import {
   getOrderVerifyingAddress,
   packOrderAppendix,
 } from "@nadohq/shared";
-import { createWalletClient, custom, privateKeyToAccount, type Address } from "viem";
+import { createWalletClient, custom, type Address } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import type {
   AccountListener,
   DepthListener,
@@ -32,7 +33,6 @@ import type {
   CreateOrderParams,
   TimeInForce,
 } from "../types";
-import type { PriceTriggerRequirementType } from "@nadohq/trigger-client";
 import type {
   NadoBestBidOfferEvent,
   NadoContractsResponse,
@@ -62,6 +62,9 @@ const WS_PING_INTERVAL_MS = 30_000;
 const WS_STALE_TIMEOUT_MS = 75_000;
 
 const DEFAULT_MARKET_SLIPPAGE_PCT = 0.01;
+const X18_BIGINT = 1_000_000_000_000_000_000n;
+
+type MinSizePolicy = "adjust" | "reject";
 
 export interface NadoGatewayOptions {
   env?: ChainEnv;
@@ -80,6 +83,7 @@ export interface NadoGatewayOptions {
   };
   marketSlippagePct?: number;
   stopTriggerSource?: NadoTriggerPriceSource;
+  minSizePolicy?: MinSizePolicy;
   logger?: (context: string, error: unknown) => void;
 }
 
@@ -201,6 +205,47 @@ function nowMs(): number {
   return Date.now();
 }
 
+function absBigInt(value: bigint): bigint {
+  return value < 0n ? -value : value;
+}
+
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  if (denominator === 0n) {
+    throw new Error("Division by zero");
+  }
+  const quotient = numerator / denominator;
+  return numerator % denominator === 0n ? quotient : quotient + 1n;
+}
+
+function roundDownToIncrement(value: bigint, increment: bigint): bigint {
+  if (increment <= 0n) return value;
+  return (value / increment) * increment;
+}
+
+function roundUpToIncrement(value: bigint, increment: bigint): bigint {
+  if (increment <= 0n) return value;
+  const remainder = value % increment;
+  if (remainder === 0n) return value;
+  return value + (increment - remainder);
+}
+
+function alignPriceX18(
+  priceX18: bigint,
+  incrementX18: bigint,
+  side: "BUY" | "SELL",
+  mode: "aggressive" | "passive"
+): bigint {
+  if (incrementX18 <= 0n) return priceX18;
+  if (mode === "aggressive") {
+    return side === "BUY"
+      ? roundUpToIncrement(priceX18, incrementX18)
+      : roundDownToIncrement(priceX18, incrementX18);
+  }
+  return side === "BUY"
+    ? roundDownToIncrement(priceX18, incrementX18)
+    : roundUpToIncrement(priceX18, incrementX18);
+}
+
 function nsToMs(ns: string): number {
   try {
     const nanos = BigInt(ns);
@@ -273,6 +318,7 @@ export class NadoGateway {
   private readonly pollIntervals: PollIntervals;
   private readonly marketSlippagePct: number;
   private readonly stopTriggerSource: NadoTriggerPriceSource;
+  private readonly minSizePolicy: MinSizePolicy;
 
   private readonly symbolMetaBySymbol = new Map<string, SymbolMeta>();
   private readonly symbolMetaByProductId = new Map<number, SymbolMeta>();
@@ -351,6 +397,7 @@ export class NadoGateway {
     const slippage = options.marketSlippagePct ?? safeToNumber(process.env.NADO_MARKET_SLIPPAGE_PCT ?? "");
     this.marketSlippagePct = Number.isFinite(slippage) && slippage > 0 ? slippage : DEFAULT_MARKET_SLIPPAGE_PCT;
     this.stopTriggerSource = options.stopTriggerSource ?? (process.env.NADO_STOP_TRIGGER_SOURCE as NadoTriggerPriceSource) ?? "oracle";
+    this.minSizePolicy = options.minSizePolicy ?? ((process.env.NADO_MIN_SIZE_POLICY ?? "").trim().toLowerCase() === "reject" ? "reject" : "adjust");
 
     this.primarySymbol = options.symbol;
     this.rememberDisplaySymbol(this.primarySymbol);
@@ -607,12 +654,12 @@ export class NadoGateway {
     if (!meta) return null;
     const priceTick = fromX18(meta.priceIncrementX18).toNumber();
     const qtyStep = fromX18(meta.sizeIncrementX18).toNumber();
-    const minBaseAmount = fromX18(meta.minSizeX18).toNumber();
+    const minQuoteAmount = fromX18(meta.minSizeX18).toNumber();
     return {
       priceTick,
       qtyStep,
       marketId: meta.productId,
-      minBaseAmount,
+      minQuoteAmount,
     };
   }
 
@@ -1439,7 +1486,7 @@ export class NadoGateway {
       },
       primaryType: "StreamAuthentication",
       message: {
-        sender,
+        sender: sender as `0x${string}`,
         expiration: BigInt(expirationMs),
       },
     });
@@ -1759,7 +1806,27 @@ export class NadoGateway {
       throw new Error("Invalid order price");
     }
 
-    const amountX18 = toX18BigInt(qty);
+    const amountX18Raw = toX18BigInt(qty);
+    const priceX18 = toX18BigInt(price);
+    const minSizeX18 = BigInt(meta.minSizeX18);
+    const sizeIncrementX18 = BigInt(meta.sizeIncrementX18);
+    const notionalX18 = (absBigInt(amountX18Raw) * priceX18) / X18_BIGINT;
+
+    const amountX18 = (() => {
+      if (notionalX18 >= minSizeX18) return absBigInt(amountX18Raw);
+      const required = roundUpToIncrement(ceilDiv(minSizeX18 * X18_BIGINT, priceX18), sizeIncrementX18);
+      if (this.minSizePolicy === "reject") {
+        const current = fromX18(notionalX18.toString()).toFixed();
+        const minimum = fromX18(minSizeX18.toString()).toFixed();
+        const requiredQty = fromX18(required.toString()).toFixed();
+        throw new Error(
+          `Order size too small: notional ${current} < min_size ${minimum} (USDT0). ` +
+            `At price ${new BigNumber(price).toFixed()} you need qty >= ${requiredQty}.`
+        );
+      }
+      return required;
+    })();
+
     const signedAmount = side === "SELL" ? -amountX18 : amountX18;
 
     const appendix = packOrderAppendix({
@@ -1827,7 +1894,7 @@ export class NadoGateway {
       type: "LIMIT",
       status: "NEW",
       price: String(price),
-      origQty: String(qty),
+      origQty: fromX18(amountX18.toString()).toFixed(),
       executedQty: "0",
       stopPrice: "0",
       time: nowMs(),
@@ -1844,6 +1911,7 @@ export class NadoGateway {
     if (!Number.isFinite(qty) || qty <= 0) {
       throw new Error("Invalid order quantity");
     }
+    const priceIncrementX18 = BigInt(meta.priceIncrementX18);
     const bbo = this.bestBidOfferByProductId.get(meta.productId);
     const reference = (() => {
       if (bbo) {
@@ -1857,11 +1925,33 @@ export class NadoGateway {
     if (!reference) {
       throw new Error("Market order rejected: missing best bid/offer");
     }
-    const limitPrice = side === "BUY"
+    const limitPriceRaw = side === "BUY"
       ? reference.multipliedBy(1 + this.marketSlippagePct)
       : reference.multipliedBy(1 - this.marketSlippagePct);
+    const limitPriceX18 = alignPriceX18(toX18BigInt(limitPriceRaw), priceIncrementX18, side, "aggressive");
+    const limitPrice = fromX18(limitPriceX18.toString());
 
-    const amountX18 = toX18BigInt(qty);
+    const amountX18Raw = toX18BigInt(qty);
+    const priceX18 = limitPriceX18;
+    const minSizeX18 = BigInt(meta.minSizeX18);
+    const sizeIncrementX18 = BigInt(meta.sizeIncrementX18);
+    const notionalX18 = (absBigInt(amountX18Raw) * priceX18) / X18_BIGINT;
+
+    const amountX18 = (() => {
+      if (notionalX18 >= minSizeX18) return absBigInt(amountX18Raw);
+      const required = roundUpToIncrement(ceilDiv(minSizeX18 * X18_BIGINT, priceX18), sizeIncrementX18);
+      if (this.minSizePolicy === "reject") {
+        const current = fromX18(notionalX18.toString()).toFixed();
+        const minimum = fromX18(minSizeX18.toString()).toFixed();
+        const requiredQty = fromX18(required.toString()).toFixed();
+        throw new Error(
+          `Order size too small: notional ${current} < min_size ${minimum} (USDT0). ` +
+            `At price ${limitPrice.toFixed()} you need qty >= ${requiredQty}.`
+        );
+      }
+      return required;
+    })();
+
     const signedAmount = side === "SELL" ? -amountX18 : amountX18;
 
     const appendix = packOrderAppendix({
@@ -1916,7 +2006,7 @@ export class NadoGateway {
       type: "MARKET",
       status: "NEW",
       price: limitPrice.toFixed(),
-      origQty: String(qty),
+      origQty: fromX18(amountX18.toString()).toFixed(),
       executedQty: "0",
       stopPrice: "0",
       time: nowMs(),
@@ -1933,18 +2023,41 @@ export class NadoGateway {
     if (!Number.isFinite(qty) || qty <= 0) {
       throw new Error("Invalid order quantity");
     }
+    const priceIncrementX18 = BigInt(meta.priceIncrementX18);
     const stopPrice = params.stopPrice ?? 0;
     if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
       throw new Error("Invalid stop price");
     }
 
-    const amountX18 = toX18BigInt(qty);
-    const signedAmount = side === "SELL" ? -amountX18 : amountX18;
+    const stopPriceX18 = alignPriceX18(toX18BigInt(stopPrice), priceIncrementX18, side, "passive");
+    const limitFromStopRaw = side === "BUY"
+      ? fromX18(stopPriceX18.toString()).multipliedBy(1 + this.marketSlippagePct)
+      : fromX18(stopPriceX18.toString()).multipliedBy(1 - this.marketSlippagePct);
+    const limitFromStopX18 = alignPriceX18(toX18BigInt(limitFromStopRaw), priceIncrementX18, side, "aggressive");
+    const limitFromStop = fromX18(limitFromStopX18.toString());
 
-    const stopPriceX18 = toX18BigInt(stopPrice);
-    const limitFromStop = side === "BUY"
-      ? fromX18(stopPriceX18).multipliedBy(1 + this.marketSlippagePct)
-      : fromX18(stopPriceX18).multipliedBy(1 - this.marketSlippagePct);
+    const amountX18Raw = toX18BigInt(qty);
+    const priceX18 = limitFromStopX18;
+    const minSizeX18 = BigInt(meta.minSizeX18);
+    const sizeIncrementX18 = BigInt(meta.sizeIncrementX18);
+    const notionalX18 = (absBigInt(amountX18Raw) * priceX18) / X18_BIGINT;
+
+    const amountX18 = (() => {
+      if (notionalX18 >= minSizeX18) return absBigInt(amountX18Raw);
+      const required = roundUpToIncrement(ceilDiv(minSizeX18 * X18_BIGINT, priceX18), sizeIncrementX18);
+      if (this.minSizePolicy === "reject") {
+        const current = fromX18(notionalX18.toString()).toFixed();
+        const minimum = fromX18(minSizeX18.toString()).toFixed();
+        const requiredQty = fromX18(required.toString()).toFixed();
+        throw new Error(
+          `Order size too small: notional ${current} < min_size ${minimum} (USDT0). ` +
+            `At price ${limitFromStop.toFixed()} you need qty >= ${requiredQty}.`
+        );
+      }
+      return required;
+    })();
+
+    const signedAmount = side === "SELL" ? -amountX18 : amountX18;
 
     const appendix = packOrderAppendix({
       orderExecutionType: "ioc",
@@ -1981,7 +2094,7 @@ export class NadoGateway {
         type: "price",
         criteria: {
           type: requirementType,
-          triggerPrice: new BigNumber(stopPrice).toFixed(),
+          triggerPrice: fromX18(stopPriceX18.toString()).toFixed(),
         },
       } as any,
     } as any);
@@ -2011,9 +2124,9 @@ export class NadoGateway {
       type: "STOP_MARKET",
       status: "NEW",
       price: limitFromStop.toFixed(),
-      origQty: String(qty),
+      origQty: fromX18(amountX18.toString()).toFixed(),
       executedQty: "0",
-      stopPrice: String(stopPrice),
+      stopPrice: fromX18(stopPriceX18.toString()).toFixed(),
       time: nowMs(),
       updateTime: nowMs(),
       reduceOnly: true,
