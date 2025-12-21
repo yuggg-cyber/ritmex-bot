@@ -5,6 +5,7 @@ import { LighterExchangeAdapter, type LighterCredentials } from "./lighter/adapt
 import { BackpackExchangeAdapter, type BackpackCredentials } from "./backpack/adapter";
 import { ParadexExchangeAdapter, type ParadexCredentials } from "./paradex/adapter";
 import { NadoExchangeAdapter, type NadoCredentials } from "./nado/adapter";
+import { StandxExchangeAdapter, type StandxCredentials } from "./standx/adapter";
 
 export interface ExchangeFactoryOptions {
   symbol: string;
@@ -15,9 +16,17 @@ export interface ExchangeFactoryOptions {
   backpack?: BackpackCredentials;
   paradex?: ParadexCredentials;
   nado?: NadoCredentials;
+  standx?: StandxCredentials;
 }
 
-export type SupportedExchangeId = "aster" | "grvt" | "lighter" | "backpack" | "paradex" | "nado";
+export type SupportedExchangeId =
+  | "aster"
+  | "grvt"
+  | "lighter"
+  | "backpack"
+  | "paradex"
+  | "nado"
+  | "standx";
 
 export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   const fallback = (value ?? process.env.EXCHANGE ?? process.env.TRADE_EXCHANGE ?? "aster")
@@ -29,6 +38,7 @@ export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   if (fallback === "backpack") return "backpack";
   if (fallback === "paradex") return "paradex";
   if (fallback === "nado") return "nado";
+  if (fallback === "standx") return "standx";
   return "aster";
 }
 
@@ -38,6 +48,7 @@ export function getExchangeDisplayName(id: SupportedExchangeId): string {
   if (id === "backpack") return "Backpack";
   if (id === "paradex") return "Paradex";
   if (id === "nado") return "Nado";
+  if (id === "standx") return "StandX";
   return "AsterDex";
 }
 
@@ -57,6 +68,9 @@ export function createExchangeAdapter(options: ExchangeFactoryOptions): Exchange
   }
   if (id === "nado") {
     return new NadoExchangeAdapter({ ...options.nado, symbol: options.symbol });
+  }
+  if (id === "standx") {
+    return new StandxExchangeAdapter({ ...options.standx, symbol: options.symbol });
   }
   return new AsterExchangeAdapter({ ...options.aster, symbol: options.symbol });
 }

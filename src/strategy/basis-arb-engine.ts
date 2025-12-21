@@ -167,7 +167,7 @@ export class BasisArbEngine {
       }
     );
 
-    if (this.exchange.id === "nado") {
+    if (this.exchange.id === "nado" || this.exchange.id === "standx") {
       safeSubscribe<AsterDepth>(
         this.exchange.watchDepth.bind(this.exchange, this.config.spotSymbol),
         (depth) => {

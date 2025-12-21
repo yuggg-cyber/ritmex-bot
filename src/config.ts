@@ -32,6 +32,7 @@ const SYMBOL_PRIORITY_BY_EXCHANGE: Record<SupportedExchangeId, { envKeys: string
   backpack: { envKeys: ["BACKPACK_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDC" },
   paradex: { envKeys: ["PARADEX_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC/USDC" },
   nado: { envKeys: ["NADO_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC-PERP" },
+  standx: { envKeys: ["STANDX_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC-USD" },
 };
 
 export function resolveSymbolFromEnv(explicitExchangeId?: SupportedExchangeId | string | null): string {
@@ -154,11 +155,21 @@ export const basisConfig: BasisArbConfig = {
   // Users can always override via BASIS_* env vars.
   futuresSymbol: resolveBasisSymbol(
     ["BASIS_FUTURES_SYMBOL", "ASTER_FUTURES_SYMBOL", "ASTER_SYMBOL", "TRADE_SYMBOL"],
-    (process.env.EXCHANGE ?? "").trim().toLowerCase() === "nado" ? "BTC-PERP" : "ASTERUSDT"
+    (() => {
+      const exchange = (process.env.EXCHANGE ?? "").trim().toLowerCase();
+      if (exchange === "nado") return "BTC-PERP";
+      if (exchange === "standx") return "BTC-USD";
+      return "ASTERUSDT";
+    })()
   ),
   spotSymbol: resolveBasisSymbol(
     ["BASIS_SPOT_SYMBOL", "ASTER_SPOT_SYMBOL", "ASTER_SYMBOL", "TRADE_SYMBOL"],
-    (process.env.EXCHANGE ?? "").trim().toLowerCase() === "nado" ? "KBTC" : "ASTERUSDT"
+    (() => {
+      const exchange = (process.env.EXCHANGE ?? "").trim().toLowerCase();
+      if (exchange === "nado") return "KBTC";
+      if (exchange === "standx") return "BTC-USD";
+      return "ASTERUSDT";
+    })()
   ),
   refreshIntervalMs: parseNumber(process.env.BASIS_REFRESH_INTERVAL_MS, 1000),
   maxLogEntries: parseNumber(process.env.BASIS_MAX_LOG_ENTRIES, 200),

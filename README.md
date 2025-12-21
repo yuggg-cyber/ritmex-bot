@@ -12,6 +12,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 
 * [Lighter 手续费优惠注册链接](https://app.lighter.xyz/?referral=111909FA)
 * [Aster 手续费优惠注册链接](https://www.asterdex.com/zh-CN/referral/4665f3)
+* [StandX 手续费优惠注册链接](https://standx.com/referral?code=xingxingjun)
 * [Binance 手续费优惠注册链接](https://www.binance.com/join?ref=KNKCA9XC)
 * [GRVT 手续费优惠注册链接](https://grvt.io/exchange/sign-up?ref=sea)
 * [Nado 手续费优惠注册链接](https://app.nado.xyz?join=LKbIUs5)
@@ -35,6 +36,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 | 交易所 | 合约类型 | 必填环境变量 | 备注 |
 | --- | --- | --- | --- |
 | Aster | USDT 永续 | `ASTER_API_KEY`, `ASTER_API_SECRET` | 默认交易所；兼容脚本引导
+| StandX | USD 永续 | `STANDX_TOKEN` | 使用 JWT Token 登录，优先走 WebSocket 推送
 | GRVT | USDT 永续 | `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID` | `GRVT_ENV` 可切换 `prod`/`testnet`
 | Lighter | zkLighter 永续 | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_PRIVATE_KEY` | 默认 `LIGHTER_ENV=testnet`
 | Backpack | USDC 永续 | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | `BACKPACK_SANDBOX=true` 启用沙盒
@@ -83,7 +85,7 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 
 | 变量 | 说明 |
 | --- | --- |
-| `EXCHANGE` | 选择交易所（`aster`/`grvt`/`lighter`/`backpack`/`paradex`/`nado`） |
+| `EXCHANGE` | 选择交易所（`aster`/`standx`/`grvt`/`lighter`/`backpack`/`paradex`/`nado`） |
 | `TRADE_SYMBOL` | 交易对（默认 `BTCUSDT`） |
 | `TRADE_AMOUNT` | 单笔下单数量（标的资产计） |
 | `LOSS_LIMIT` | 单笔最大亏损触发的强平额度（USDT） |
@@ -107,6 +109,13 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 2. 填写 `ASTER_API_KEY` 与 `ASTER_API_SECRET`。
 3. 根据交易对调整 `TRADE_SYMBOL`、`PRICE_TICK`、`QTY_STEP` 等精度参数。
 4. 一键脚本会自动写入这些变量，手动部署时需自行维护。
+
+### StandX
+1. 设置 `EXCHANGE=standx`。
+2. 填写 `STANDX_TOKEN`（Perps API 的 JWT Token）。
+3. 设置 `STANDX_SYMBOL`（默认 `BTC-USD`），并校准 `PRICE_TICK` / `QTY_STEP`。
+4. 可选：`STANDX_BASE_URL`、`STANDX_WS_URL`、`STANDX_SESSION_ID` 用于自定义环境。
+5. 可选：如需请求签名，补充 `STANDX_REQUEST_PRIVATE_KEY`。
 
 ### GRVT
 1. 在 `.env` 中设置 `EXCHANGE=grvt`。

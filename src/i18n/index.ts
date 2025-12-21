@@ -229,8 +229,8 @@ const translations: Record<string, TranslationEntry> = {
   "grid.direction.long": { zh: "多", en: "Long" },
   "grid.direction.short": { zh: "空", en: "Short" },
   "basis.onlyAster": {
-    zh: "期现套利策略目前仅支持 Aster / Nado 交易所。请设置 EXCHANGE=aster 或 EXCHANGE=nado 后重试。",
-    en: "Basis arbitrage currently supports only Aster and Nado. Set EXCHANGE=aster or EXCHANGE=nado and retry.",
+    zh: "期现套利策略目前仅支持 Aster / Nado / StandX 交易所。请设置 EXCHANGE=aster 或 EXCHANGE=nado 或 EXCHANGE=standx 后重试。",
+    en: "Basis arbitrage currently supports only Aster, Nado, and StandX. Set EXCHANGE=aster, EXCHANGE=nado, or EXCHANGE=standx and retry.",
   },
   "basis.startFailed": {
     zh: "无法启动期现套利策略: {message}",
@@ -337,6 +337,10 @@ const translations: Record<string, TranslationEntry> = {
   "env.invalidNadoAddress": {
     zh: "NADO_SUBACCOUNT_OWNER / NADO_EVM_ADDRESS 必须是有效的 0x 开头 40 字节十六进制地址",
     en: "NADO_SUBACCOUNT_OWNER / NADO_EVM_ADDRESS must be a valid 0x-prefixed 40-byte hex address",
+  },
+  "env.missingStandx": {
+    zh: "StandX 需要配置 STANDX_TOKEN",
+    en: "StandX requires STANDX_TOKEN",
   },
   "log.subscribe.accountFail": {
     zh: "订阅账户失败: {error}",

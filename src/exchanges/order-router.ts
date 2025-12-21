@@ -14,8 +14,9 @@ import * as grvtOrders from "./grvt/order";
 import * as lighterOrders from "./lighter/order";
 import * as paradexOrders from "./paradex/order";
 import * as nadoOrders from "./nado/order";
+import * as standxOrders from "./standx/order";
 
-type ExchangeKey = "aster" | "backpack" | "grvt" | "lighter" | "paradex" | "nado";
+type ExchangeKey = "aster" | "backpack" | "grvt" | "lighter" | "paradex" | "nado" | "standx";
 
 interface ExchangeOrderHandlers {
   limit(intent: LimitOrderIntent): Promise<AsterOrder>;
@@ -68,9 +69,24 @@ const handlerMap: Record<ExchangeKey, ExchangeOrderHandlers> = {
     trailingStop: nadoOrders.createTrailingStopOrder,
     close: nadoOrders.createClosePositionOrder,
   },
+  standx: {
+    limit: standxOrders.createLimitOrder,
+    market: standxOrders.createMarketOrder,
+    stop: standxOrders.createStopOrder,
+    trailingStop: standxOrders.createTrailingStopOrder,
+    close: standxOrders.createClosePositionOrder,
+  },
 };
 
-const knownExchanges: ExchangeKey[] = ["aster", "backpack", "grvt", "lighter", "paradex", "nado"];
+const knownExchanges: ExchangeKey[] = [
+  "aster",
+  "backpack",
+  "grvt",
+  "lighter",
+  "paradex",
+  "nado",
+  "standx",
+];
 
 function normalizeExchangeId(value: string | undefined | null): string | undefined {
   if (!value) return undefined;

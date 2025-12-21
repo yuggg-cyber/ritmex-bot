@@ -4,6 +4,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 
 * [Lighter referral link](https://app.lighter.xyz/?referral=111909FA)
 * [Aster referral link](https://www.asterdex.com/en/referral/4665f3)
+* [StandX referral link](https://standx.com/referral?code=xingxingjun)
 * [Binance referral link](https://www.binance.com/join?ref=KNKCA9XC)
 * [GRVT referral link](https://grvt.io/exchange/sign-up?ref=sea)
 * [Nado referral link](https://app.nado.xyz?join=LKbIUs5)
@@ -27,6 +28,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 | Exchange | Contract Type | Required Environment Variables | Notes |
 | --- | --- | --- | --- |
 | Aster | USDT perpetuals | `ASTER_API_KEY`, `ASTER_API_SECRET` | Default venue; works with the bootstrap script |
+| StandX | USD perpetuals | `STANDX_TOKEN` | Uses JWT token auth; prefer websocket streams |
 | GRVT | USDT perpetuals | `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID` | Switch `GRVT_ENV` between `prod` and `testnet` |
 | Lighter | zkLighter perpetuals | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_PRIVATE_KEY` | Defaults to `LIGHTER_ENV=testnet` |
 | Backpack | USDC perpetuals | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | Set `BACKPACK_SANDBOX=true` for the sandbox |
@@ -75,7 +77,7 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 
 | Variable | Purpose |
 | --- | --- |
-| `EXCHANGE` | Choose the venue (`aster` / `grvt` / `lighter` / `backpack` / `paradex` / `nado`) |
+| `EXCHANGE` | Choose the venue (`aster` / `standx` / `grvt` / `lighter` / `backpack` / `paradex` / `nado`) |
 | `TRADE_SYMBOL` | Contract symbol (defaults to `BTCUSDT`) |
 | `TRADE_AMOUNT` | Order size in base asset units |
 | `LOSS_LIMIT` | Max per-trade loss in USDT before forced close |
@@ -99,6 +101,13 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 2. Supply `ASTER_API_KEY` and `ASTER_API_SECRET`.
 3. Adjust `TRADE_SYMBOL`, `PRICE_TICK`, and `QTY_STEP` to match the requested market.
 4. The bootstrap script auto-populates these variables; manual installs must maintain them.
+
+### StandX
+1. Set `EXCHANGE=standx`.
+2. Provide `STANDX_TOKEN` (JWT token for perps API).
+3. Set `STANDX_SYMBOL` (defaults to `BTC-USD`) and align `PRICE_TICK` / `QTY_STEP`.
+4. Optional: `STANDX_BASE_URL`, `STANDX_WS_URL`, or `STANDX_SESSION_ID` for custom endpoints.
+5. Optional: `STANDX_REQUEST_PRIVATE_KEY` if the API requires body signatures.
 
 ### GRVT
 1. Set `EXCHANGE=grvt` inside `.env`.

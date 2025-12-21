@@ -5,6 +5,7 @@ import type { LighterCredentials } from "./lighter/adapter";
 import type { BackpackCredentials } from "./backpack/adapter";
 import type { ParadexCredentials } from "./paradex/adapter";
 import type { NadoCredentials } from "./nado/adapter";
+import type { StandxCredentials } from "./standx/adapter";
 import { t } from "../i18n";
 import type { Address } from "viem";
 
@@ -40,6 +41,11 @@ export function buildAdapterFromEnv(options: BuildAdapterOptions): ExchangeAdapt
   if (id === "nado") {
     const credentials = resolveNadoCredentials(symbol);
     return createExchangeAdapter({ exchange: id, symbol, nado: credentials });
+  }
+
+  if (id === "standx") {
+    const credentials = resolveStandxCredentials(symbol);
+    return createExchangeAdapter({ exchange: id, symbol, standx: credentials });
   }
 
   return createExchangeAdapter({ exchange: id, symbol, grvt: { symbol } });
@@ -151,6 +157,21 @@ function resolveNadoCredentials(symbol: string): NadoCredentials {
   };
 
   return credentials;
+}
+
+function resolveStandxCredentials(symbol: string): StandxCredentials {
+  const token = process.env.STANDX_TOKEN;
+  if (!token) {
+    throw new Error(t("env.missingStandx"));
+  }
+  return {
+    token,
+    symbol: process.env.STANDX_SYMBOL ?? symbol,
+    baseUrl: process.env.STANDX_BASE_URL ?? undefined,
+    wsUrl: process.env.STANDX_WS_URL ?? undefined,
+    sessionId: process.env.STANDX_SESSION_ID ?? undefined,
+    signingKey: process.env.STANDX_REQUEST_PRIVATE_KEY ?? undefined,
+  };
 }
 
 function isHex32(value: string): boolean {
