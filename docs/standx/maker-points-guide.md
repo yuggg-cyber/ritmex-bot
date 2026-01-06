@@ -36,8 +36,8 @@ bun install
 
 ```bash
 EXCHANGE=standx
-STANDX_REQUEST_PRIVATE_KEY=你的代理钱包私钥
-STANDX_TOKEN=你的token
+STANDX_REQUEST_PRIVATE_KEY=你的代理钱包私钥 (1.2 获取 StandX 登录凭证（Token）中的代理钱包私钥)
+STANDX_TOKEN=你的token (1.2 获取 StandX 登录凭证（Token）中的token)
 STANDX_SYMBOL=BTC-USD
 
 MAKER_POINTS_ORDER_AMOUNT=0.01

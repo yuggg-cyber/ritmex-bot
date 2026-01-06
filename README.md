@@ -120,7 +120,7 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 1. 打开 https://standx.ritmex.one/
 2. 连接钱包
 3. 点击“登录”
-4. 导出登录信息里面会包含 token和代理钱包私钥，代理钱包仅用于交易签名，有效保证资产钱包安全
+4. 导出登录信息里面会包含 token(STANDX_TOKEN) 和代理钱包私钥(STANDX_REQUEST_PRIVATE_KEY)，代理钱包仅用于交易签名，有效保证资产钱包安全
 
 请妥善保存，不要分享给他人
 
