@@ -8,7 +8,7 @@ import type {
 } from "../exchanges/types";
 import { formatPriceToString } from "../utils/math";
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
-import { extractMessage, isInsufficientBalanceError, isRateLimitError, isUnknownOrderError } from "../utils/errors";
+import { extractMessage, isInsufficientBalanceError, isPrecisionError, isRateLimitError, isUnknownOrderError } from "../utils/errors";
 import { isOrderActiveStatus } from "../utils/order-status";
 import { getPosition, parseSymbolParts } from "../utils/strategy";
 import type { PositionSnapshot } from "../utils/strategy";
@@ -617,6 +617,10 @@ export class MakerPointsEngine {
           this.registerInsufficientBalance(error);
           break;
         }
+        if (isPrecisionError(error)) {
+          this.tradeLog.push("warn", `检测到精度错误，重新同步: ${extractMessage(error)}`);
+          this.syncPrecision(true);
+        }
         this.tradeLog.push(
           "error",
           `挂单失败 ${target.side} @ ${target.price}: ${extractMessage(error)}`
@@ -676,6 +680,9 @@ export class MakerPointsEngine {
     } catch (error) {
       if (isUnknownOrderError(error)) {
         this.tradeLog.push("order", "止损平仓时订单已不存在");
+      } else if (isPrecisionError(error)) {
+        this.tradeLog.push("warn", `止损平仓精度错误，重新同步: ${extractMessage(error)}`);
+        this.syncPrecision(true);
       } else {
         this.tradeLog.push("error", `止损平仓失败: ${extractMessage(error)}`);
       }
@@ -711,12 +718,13 @@ export class MakerPointsEngine {
     }
   }
 
-  private syncPrecision(): void {
-    if (this.precisionSync) return;
+  private syncPrecision(force = false): void {
+    if (this.precisionSync && !force) return;
     const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
     if (!getPrecision) return;
     this.precisionSync = getPrecision()
       .then((precision) => {
+        this.precisionSync = null;
         if (!precision) return;
         let updated = false;
         if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
