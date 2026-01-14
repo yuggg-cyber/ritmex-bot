@@ -37,6 +37,7 @@ If you'd like to support this project and get fee discounts, please consider usi
 | Lighter | zkLighter perpetuals | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_PRIVATE_KEY` | Defaults to `LIGHTER_ENV=testnet` |
 | Backpack | USDC perpetuals | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | Set `BACKPACK_SANDBOX=true` for the sandbox |
 | Paradex | StarkEx perpetuals | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | Toggle `PARADEX_SANDBOX=true` for the testnet |
+| Nado | USDC perpetuals | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | Switch `NADO_ENV` between `inkMainnet` and `inkTestnet` |
 
 ## Requirements
 - Bun >= 1.2 (both `bun` and `bunx` on PATH)

@@ -41,6 +41,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 | Lighter | zkLighter 永续 | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_PRIVATE_KEY` | 默认 `LIGHTER_ENV=testnet`
 | Backpack | USDC 永续 | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | `BACKPACK_SANDBOX=true` 启用沙盒
 | Paradex | StarkEx 永续 | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | `PARADEX_SANDBOX=true` 使用测试网
+| Nado | USDC 永续 | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | `NADO_ENV` 可切换 `inkMainnet`/`inkTestnet`
 
 ## 系统要求
 - Bun ≥ 1.2（需同时包含 `bun`、`bunx` 命令）
