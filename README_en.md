@@ -112,21 +112,30 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 
 * [StandX Maker Points Strategy Guide](docs/standx/maker-points-guide.md)
 
-The strategy requires a StandX login token to place orders.
+The strategy requires a StandX API Token and signing private key to place orders.
 
-How to obtain the token:
-1. Open https://standx.ritmex.one/
-2. Connect your wallet
-3. Click "Login"
-4. Export your login credentials, which will include the token (`STANDX_TOKEN`) and proxy wallet private key (`STANDX_REQUEST_PRIVATE_KEY`). The proxy wallet is only used for trade signatures, keeping your main wallet secure.
+**How to obtain (using StandX's official API generation feature):**
+1. Open the StandX official API creation page: https://standx.com/user/session
+2. Connect your wallet and log in
+3. Click the **"Generate API Token"** button
+4. The page will display the following information:
+   - **Token** (JWT string starting with `eyJ`) → Fill in `STANDX_TOKEN`
+   - **Ed25519 Private Key** (Base58 format, like `HdsyJD7oWgT...`) → Fill in `STANDX_REQUEST_PRIVATE_KEY`
+   - **Creation date** and **Validity days** → Used to configure token expiry reminders
+
+> The Ed25519 Private Key is an auto-generated signing key used only for trade request signatures. Your assets remain in your main wallet and are completely safe.
 
 Please keep these credentials safe and do not share them with anyone.
 
+**Configuration steps:**
 1. Set `EXCHANGE=standx`.
 2. Provide `STANDX_TOKEN` (JWT token for perps API).
-3. Provide `STANDX_REQUEST_PRIVATE_KEY` (proxy wallet private key).
+3. Provide `STANDX_REQUEST_PRIVATE_KEY` (Ed25519 signing private key, Base58 format).
 4. Set `STANDX_SYMBOL` (defaults to `BTC-USD`) and align `PRICE_TICK` / `QTY_STEP`.
-5. Optional: `STANDX_BASE_URL`, `STANDX_WS_URL`, or `STANDX_SESSION_ID` for custom endpoints.
+5. Recommended: configure token expiry settings:
+   - `STANDX_TOKEN_CREATE_DATE` (creation date, format `YYYY-MM-DD`)
+   - `STANDX_TOKEN_VALIDITY_DAYS` (validity days)
+6. Optional: `STANDX_BASE_URL`, `STANDX_WS_URL`, or `STANDX_SESSION_ID` for custom endpoints.
 
 ### GRVT
 1. Set `EXCHANGE=grvt` inside `.env`.

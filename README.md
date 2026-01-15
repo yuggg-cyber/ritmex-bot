@@ -115,21 +115,30 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 
 * [StandX 做市策略教程](docs/standx/maker-points-guide.md)
 
-策略需要 StandX 的登录 token 才能下单
+策略需要 StandX 的 API Token 和签名私钥才能下单。
 
-获取方式：
-1. 打开 https://standx.ritmex.one/
-2. 连接钱包
-3. 点击“登录”
-4. 导出登录信息里面会包含 token(STANDX_TOKEN) 和代理钱包私钥(STANDX_REQUEST_PRIVATE_KEY)，代理钱包仅用于交易签名，有效保证资产钱包安全
+**获取方式（使用 StandX 官方 API 生成功能）：**
+1. 打开 StandX 官方 API 创建页面：https://standx.com/user/session
+2. 连接钱包并登录
+3. 点击 **"Generate API Token"** 按钮
+4. 页面会显示以下信息：
+   - **Token**（以 `eyJ` 开头的 JWT 字符串）→ 填入 `STANDX_TOKEN`
+   - **Ed25519 Private Key**（Base58 格式私钥，类似 `HdsyJD7oWgT...`）→ 填入 `STANDX_REQUEST_PRIVATE_KEY`
+   - **创建日期** 和 **有效期天数** → 用于配置 Token 过期提醒
 
-请妥善保存，不要分享给他人
+> Ed25519 Private Key 是系统自动生成的签名私钥，仅用于交易请求签名，你的资产仍在主钱包中，非常安全。
 
+请妥善保存这些凭证，不要分享给他人。
+
+**配置步骤：**
 1. 设置 `EXCHANGE=standx`。
 2. 填写 `STANDX_TOKEN`（Perps API 的 JWT Token）。
-3. 填写 `STANDX_REQUEST_PRIVATE_KEY`（代理钱包私钥）。
+3. 填写 `STANDX_REQUEST_PRIVATE_KEY`（Ed25519 签名私钥，Base58 格式）。
 4. 设置 `STANDX_SYMBOL`（默认 `BTC-USD`），并校准 `PRICE_TICK` / `QTY_STEP`。
-5. 可选：`STANDX_BASE_URL`、`STANDX_WS_URL`、`STANDX_SESSION_ID` 用于自定义环境。
+5. 推荐配置 Token 过期时间：
+   - `STANDX_TOKEN_CREATE_DATE`（创建日期，格式 `YYYY-MM-DD`）
+   - `STANDX_TOKEN_VALIDITY_DAYS`（有效期天数）
+6. 可选：`STANDX_BASE_URL`、`STANDX_WS_URL`、`STANDX_SESSION_ID` 用于自定义环境。
 
 
 ### GRVT
