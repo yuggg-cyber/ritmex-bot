@@ -701,9 +701,13 @@ export class MakerPointsEngine {
       if (!target) continue;
       if (target.amount < EPS) continue;
       try {
-        // 计算止损价格：买单在价格下方 $1，卖单在价格上方 $1
+        // reduce-only 订单不能设置 tp/sl，仅开仓单设置止损
         const priceNum = Number(target.price);
-        const slPrice = target.side === "BUY" ? priceNum - 1 : priceNum + 1;
+        const slPrice = target.reduceOnly
+          ? undefined
+          : target.side === "BUY"
+            ? priceNum - 1
+            : priceNum + 1;
         await placeOrder(
           this.exchange,
           this.config.symbol,
