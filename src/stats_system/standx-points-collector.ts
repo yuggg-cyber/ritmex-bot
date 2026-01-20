@@ -29,8 +29,8 @@ const STANDX_ENDPOINTS = {
  */
 const SCALE_FACTORS = {
   TRADING: 1_000_000,           // 交易积分 ÷ 1,000,000
-  MAKER: 1_000_000_000,         // 挂单积分 ÷ 1,000,000,000
-  PERPS: 1_000_000_000,         // 存款积分 ÷ 1,000,000,000
+  MAKER: 1_000_000,             // 挂单积分 ÷ 1,000,000
+  PERPS: 1_000_000,             // 存款积分 ÷ 1,000,000
 };
 
 class StandxPointsCollector {
