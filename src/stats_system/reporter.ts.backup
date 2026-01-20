@@ -5,7 +5,6 @@
  */
 
 import { collector, type HourlyStats } from "./collector";
-import { standxCollector, type StandxPointsData } from "./standx-points-collector";
 
 class StatsReporter {
   private enabled: boolean = false;
@@ -13,7 +12,6 @@ class StatsReporter {
   private heartbeatUrl: string = "";
   private timer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private pointsTimer: ReturnType<typeof setInterval> | null = null;
   private lastReportTime: number = -1; // 记录上次上报的时间戳，避免重复上报
 
   /**
@@ -33,12 +31,8 @@ class StatsReporter {
     if (this.enabled && this.serverUrl) {
       this.scheduleReport();
       this.scheduleHeartbeat();
-      this.schedulePointsReport();
       console.log("[StatsReporter] 已启用，Server URL: " + this.serverUrl);
     }
-    
-    // 初始化 StandX 积分收集器
-    standxCollector.init();
   }
 
   /**
@@ -141,76 +135,6 @@ class StatsReporter {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
-    }
-    if (this.pointsTimer) {
-      clearInterval(this.pointsTimer);
-      this.pointsTimer = null;
-    }
-  }
-
-  /**
-   * 调度积分上报任务 - 每 3 分钟上报一次（延迟 30 秒启动）
-   */
-  private schedulePointsReport(): void {
-    if (!standxCollector.isEnabled()) {
-      console.log("[StatsReporter] StandX 积分上报未启用（未配置 Token）");
-      return;
-    }
-
-    // 延迟 30 秒启动，避免与统计上报冲突
-    setTimeout(() => {
-      // 立即执行一次
-      this.sendPointsReport();
-      
-      // 然后每 3 分钟执行一次
-      this.pointsTimer = setInterval(() => {
-        this.sendPointsReport();
-      }, 3 * 60 * 1000);
-      
-      console.log("[StatsReporter] StandX 积分上报已启动（每3分钟）");
-    }, 30 * 1000);
-  }
-
-  /**
-   * 发送积分报告（Fire-and-forget）
-   */
-  private async sendPointsReport(): Promise<void> {
-    try {
-      const pointsData = await standxCollector.fetchPoints();
-      
-      if (!pointsData) {
-        // 查询失败，静默跳过
-        return;
-      }
-
-      // 尝试上报到服务器
-      await this.postPoints(pointsData);
-    } catch (error: any) {
-      // 所有错误都被捕获，不向上传播
-      console.error("[StatsReporter] 积分上报失败:", error.message);
-    }
-  }
-
-  /**
-   * POST 积分数据到 Server
-   */
-  private async postPoints(pointsData: StandxPointsData): Promise<void> {
-    try {
-      const pointsUrl = this.serverUrl.replace("/stats", "/stats/points");
-      const response = await fetch(pointsUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(pointsData),
-        signal: AbortSignal.timeout(5000),
-      });
-
-      if (!response.ok) {
-        throw new Error("HTTP " + response.status);
-      }
-
-      console.log("[StatsReporter] 积分上报成功: " + pointsData.botName);
-    } catch (error) {
-      throw error;
     }
   }
 }
