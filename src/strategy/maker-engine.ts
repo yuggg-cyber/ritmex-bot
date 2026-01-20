@@ -14,7 +14,7 @@ import { isOrderActiveStatus } from "../utils/order-status";
 import { getPosition } from "../utils/strategy";
 import type { PositionSnapshot } from "../utils/strategy";
 import { computePositionPnl } from "../utils/pnl";
-import { getTopPrices, getPricesAtLevel, getMidOrLast } from "../utils/price";
+import { getTopPrices, getMidOrLast } from "../utils/price";
 import { shouldStopLoss } from "../utils/risk";
 import {
   marketClose,
@@ -27,6 +27,7 @@ import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { t } from "../i18n";
 
@@ -71,6 +72,7 @@ export class MakerEngine {
   private depthSnapshot: AsterDepth | null = null;
   private tickerSnapshot: AsterTicker | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
 
   private readonly locks: OrderLockMap = {};
   private readonly timers: OrderTimerMap = {};
@@ -165,6 +167,12 @@ export class MakerEngine {
         }
         const position = getPosition(snapshot, this.config.symbol);
         this.sessionVolume.update(position, this.getReferencePrice());
+        
+        const pnl = position?.unrealizedPnl || 0;
+        const positionAmt = position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         if (!this.feedArrived.account) {
           this.tradeLog.push("info", t("log.account.snapshotSynced"));
           this.feedArrived.account = true;
@@ -192,6 +200,14 @@ export class MakerEngine {
             )
           : [];
         const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
+        
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            collector.logFill();
+          }
+        }
+        this.prevActiveIds = currentIds;
+        
         for (const id of Array.from(this.pendingCancelOrders)) {
           if (!currentIds.has(id)) {
             this.pendingCancelOrders.delete(id);
@@ -305,18 +321,10 @@ export class MakerEngine {
 
       // 直接使用orderbook价格，格式化为字符串避免精度问题
       const priceDecimals = this.getPriceDecimals();
-      // 平仓价格始终使用买1/卖1
       const closeBidPrice = formatPriceToString(topBid, priceDecimals);
       const closeAskPrice = formatPriceToString(topAsk, priceDecimals);
-
-      // 开仓价格根据 entryDepthLevel 使用指定档位
-      const entryLevel = this.config.entryDepthLevel ?? 1;
-      const { bidAtLevel: entryBid, askAtLevel: entryAsk } = getPricesAtLevel(depth, entryLevel);
-      const entryBidBase = entryBid ?? topBid;
-      const entryAskBase = entryAsk ?? topAsk;
-
-      const bidPrice = formatPriceToString(entryBidBase - this.config.bidOffset, priceDecimals);
-      const askPrice = formatPriceToString(entryAskBase + this.config.askOffset, priceDecimals);
+      const bidPrice = formatPriceToString(topBid - this.config.bidOffset, priceDecimals);
+      const askPrice = formatPriceToString(topAsk + this.config.askOffset, priceDecimals);
       const position = getPosition(this.accountSnapshot, this.config.symbol);
       const absPosition = Math.abs(position.positionAmt);
       const desired: DesiredOrder[] = [];

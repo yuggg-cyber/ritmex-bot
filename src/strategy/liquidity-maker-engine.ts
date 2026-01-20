@@ -14,7 +14,7 @@ import { isOrderActiveStatus } from "../utils/order-status";
 import { getPosition, parseSymbolParts } from "../utils/strategy";
 import type { PositionSnapshot } from "../utils/strategy";
 import { computePositionPnl } from "../utils/pnl";
-import { getTopPrices, getPricesAtLevel, getMidOrLast } from "../utils/price";
+import { getTopPrices, getMidOrLast } from "../utils/price";
 import { shouldStopLoss } from "../utils/risk";
 import {
   marketClose,
@@ -28,6 +28,7 @@ import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { SessionVolumeTracker } from "./common/session-volume";
 
 interface DesiredOrder {
@@ -71,6 +72,7 @@ export class LiquidityMakerEngine {
   private lastKline: AsterKline | null = null;
   private liveCandle: { startMs: number; open: number; close: number } | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
 
   private readonly locks: OrderLockMap = {};
   private readonly timers: OrderTimerMap = {};
@@ -215,6 +217,12 @@ export class LiquidityMakerEngine {
           position.entryPrice = this.spotEntryPrice;
         }
         this.sessionVolume.update(position, this.getReferencePrice());
+        
+        const pnl = position?.unrealizedPnl || 0;
+        const positionAmt = position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -249,6 +257,13 @@ export class LiquidityMakerEngine {
 
         // 检测被成交的订单（上一轮存在但这一轮消失的订单）
         this.detectFills(orders);
+        
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            collector.logFill();
+          }
+        }
+        this.prevActiveIds = currentIds;
 
         this.openOrders = activeOrders;
         this.lastOrderIds = currentIds;
@@ -430,18 +445,10 @@ export class LiquidityMakerEngine {
 
       // 直接使用orderbook价格，格式化为字符串避免精度问题
       const priceDecimals = this.getPriceDecimals();
-      // 平仓价格始终使用买1/卖1
       const closeBidPrice = formatPriceToString(finalBid, priceDecimals);
       const closeAskPrice = formatPriceToString(finalAsk, priceDecimals);
-
-      // 开仓价格根据 entryDepthLevel 使用指定档位
-      const entryLevel = this.config.entryDepthLevel ?? 1;
-      const { bidAtLevel: entryBid, askAtLevel: entryAsk } = getPricesAtLevel(latestDepth, entryLevel);
-      const entryBidBase = entryBid ?? finalBid;
-      const entryAskBase = entryAsk ?? finalAsk;
-
-      const rawBidPrice = entryBidBase - this.config.bidOffset;
-      const rawAskPrice = entryAskBase + this.config.askOffset;
+      const rawBidPrice = finalBid - this.config.bidOffset;
+      const rawAskPrice = finalAsk + this.config.askOffset;
       const safeBid = this.ensureMakerPrice("BUY", rawBidPrice, finalBid, finalAsk);
       const safeAsk = this.ensureMakerPrice("SELL", rawAskPrice, finalBid, finalAsk);
       const bidPrice = safeBid != null ? formatPriceToString(safeBid, priceDecimals) : null;
@@ -635,23 +642,18 @@ export class LiquidityMakerEngine {
 
     let targetPrice: number;
 
-    // 基于最近成交或入场价计算目标价，应用 closeTickOffset
+    // 基于最近成交或orderbook计算目标价
     if (this.lastFill && Date.now() - this.lastFill.timestamp < 60000) {
       // 最近1分钟内有成交，基于成交价计算
       if (closeSide === "SELL") {
+        // 多头平仓：在成交价上方挂卖单
         targetPrice = this.lastFill.price + tickOffset;
       } else {
+        // 空头平仓：在成交价下方挂买单
         targetPrice = this.lastFill.price - tickOffset;
       }
-    } else if (entryPrice && Number.isFinite(entryPrice) && entryPrice > 0) {
-      // 没有最近成交但有入场价，基于入场价计算
-      if (closeSide === "SELL") {
-        targetPrice = entryPrice + tickOffset;
-      } else {
-        targetPrice = entryPrice - tickOffset;
-      }
     } else {
-      // 没有成交也没有入场价，使用orderbook价格
+      // 没有最近成交，使用orderbook价格
       if (closeSide === "SELL") {
         targetPrice = topAsk;
       } else {
@@ -659,18 +661,18 @@ export class LiquidityMakerEngine {
       }
     }
 
-    // 确保不亏本（仅当目标价低于入场价时调整）
+    // 确保不亏本
     if (entryPrice && Number.isFinite(entryPrice) && entryPrice > 0) {
       if (closeSide === "SELL") {
         // 多头平仓：卖价必须 >= 入场价
         if (targetPrice < entryPrice) {
-          targetPrice = entryPrice + this.priceTick;
+          targetPrice = entryPrice + this.priceTick; // 至少盈利1个tick
           this.tradeLog.push("info", `平仓价调整为入场价+1tick以确保不亏本: ${targetPrice.toFixed(priceDecimals)}`);
         }
       } else {
         // 空头平仓：买价必须 <= 入场价
         if (targetPrice > entryPrice) {
-          targetPrice = entryPrice - this.priceTick;
+          targetPrice = entryPrice - this.priceTick; // 至少盈利1个tick
           this.tradeLog.push("info", `平仓价调整为入场价-1tick以确保不亏本: ${targetPrice.toFixed(priceDecimals)}`);
         }
       }

@@ -25,6 +25,7 @@ import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { BinanceDepthTracker, type BinanceDepthSnapshot } from "./common/binance-depth";
 import { buildBpsTargets } from "./maker-points-logic";
@@ -83,15 +84,14 @@ type MakerPointsListener = (snapshot: MakerPointsSnapshot) => void;
 
 const EPS = 1e-5;
 const INSUFFICIENT_BALANCE_COOLDOWN_MS = 15_000;
-const STOP_LOSS_COOLDOWN_MS = 5_000;
-const STOP_LOSS_CHECK_INTERVAL_MS = 250; // 止损检查最大间隔
-const STOP_LOSS_RETRY_INTERVAL_MS = 500; // 止损失败后重试间隔
+const STOP_LOSS_COOLDOWN_MS = 10_000;
 
 export class MakerPointsEngine {
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
   private tickerSnapshot: AsterTicker | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
 
   private readonly locks: OrderLockMap = {};
   private readonly timers: OrderTimerMap = {};
@@ -175,6 +175,13 @@ export class MakerPointsEngine {
     });
     this.binanceDepth.onUpdate(() => {
       this.feedStatus.binance = true;
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     });
     this.syncPrecision();
@@ -189,7 +196,7 @@ export class MakerPointsEngine {
     if (!this.stopLossTimer) {
       this.stopLossTimer = setInterval(() => {
         void this.checkStopLoss();
-      }, Math.min(STOP_LOSS_CHECK_INTERVAL_MS, this.config.refreshIntervalMs));
+      }, Math.max(500, this.config.refreshIntervalMs));
     }
     this.binanceDepth.start();
   }
@@ -233,6 +240,12 @@ export class MakerPointsEngine {
         this.sessionVolume.update(position, this.getReferencePrice());
         this.detectPositionChange(position);
         this.feedStatus.account = true;
+        
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(snapshot.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -255,6 +268,29 @@ export class MakerPointsEngine {
             )
           : [];
         const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
+        
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            // 排除上个统计周期遗留的订单
+            if (collector.isBaselineOrder(prevId)) {
+              continue;
+            }
+            
+            // 区分订单是被撤销还是被成交
+            if (this.pendingCancelOrders.has(prevId)) {
+              collector.logCancelOrder();
+            } else {
+              collector.logFill();
+            }
+          }
+        }
+        this.prevActiveIds = currentIds;
+        
+        // 在第一次回调时，将当前的活跃订单设置为基准订单
+        if (!this.initialOrderSnapshotReady) {
+          collector.setBaselineOrders(Array.from(currentIds));
+        }
+        
         for (const id of Array.from(this.pendingCancelOrders)) {
           if (!currentIds.has(id)) {
             this.pendingCancelOrders.delete(id);
@@ -262,6 +298,13 @@ export class MakerPointsEngine {
         }
         this.initialOrderSnapshotReady = true;
         this.feedStatus.orders = true;
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -276,6 +319,13 @@ export class MakerPointsEngine {
       (depth) => {
         this.depthSnapshot = depth;
         this.feedStatus.depth = true;
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -290,6 +340,13 @@ export class MakerPointsEngine {
       (ticker) => {
         this.tickerSnapshot = ticker;
         this.feedStatus.ticker = true;
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -351,6 +408,11 @@ export class MakerPointsEngine {
         this.tradeLog.push("info", `重连后查询到 ${realOrders.length} 个挂单`);
 
         if (realOrders.length > 0) {
+          // 将所有订单添加到 pendingCancelOrders
+          for (const order of realOrders) {
+            this.pendingCancelOrders.add(String(order.orderId));
+          }
+          
           // 取消所有挂单
           if (this.exchange.forceCancelAllOrders) {
             const success = await this.exchange.forceCancelAllOrders();
@@ -423,6 +485,13 @@ export class MakerPointsEngine {
     try {
       const decision = this.rateLimit.beforeCycle();
       if (decision === "paused") {
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return;
       }
@@ -431,11 +500,25 @@ export class MakerPointsEngine {
       }
       if (!this.isReady()) {
         this.logReadinessBlockers();
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return;
       }
       this.resetReadinessFlags();
       if (!(await this.ensureStartupOrderReset())) {
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return;
       }
@@ -444,6 +527,12 @@ export class MakerPointsEngine {
       const absPosition = Math.abs(position.positionAmt);
 
       if (await this.handleTokenExpiry(position, absPosition)) {
+        
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return;
       }
@@ -451,6 +540,13 @@ export class MakerPointsEngine {
       const depth = this.depthSnapshot!;
       const { topBid, topAsk } = getTopPrices(depth);
       if (topBid == null || topAsk == null) {
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return;
       }
@@ -521,6 +617,12 @@ export class MakerPointsEngine {
       this.logDesiredOrders(desired);
       this.sessionVolume.update(position, this.getReferencePrice());
       await this.syncOrders(desired, closeOnly);
+        
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     } catch (error) {
       if (isRateLimitError(error)) {
@@ -530,6 +632,13 @@ export class MakerPointsEngine {
       } else {
         this.tradeLog.push("error", `MakerPoints 主循环异常: ${extractMessage(error)}`);
       }
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     } finally {
       this.rateLimit.onCycleComplete(hadRateLimit);
@@ -642,10 +751,21 @@ export class MakerPointsEngine {
       return true;
     }
     try {
+      // 将所有订单添加到 pendingCancelOrders
+      for (const order of this.openOrders) {
+        this.pendingCancelOrders.add(String(order.orderId));
+      }
+      
       await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
-      this.pendingCancelOrders.clear();
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
       this.openOrders = [];
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
       this.tradeLog.push("order", "启动时清理历史挂单");
       this.initialOrderResetDone = true;
@@ -655,6 +775,13 @@ export class MakerPointsEngine {
         this.tradeLog.push("order", "历史挂单已消失，跳过启动清理");
         this.initialOrderResetDone = true;
         this.openOrders = [];
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return true;
       }
@@ -797,6 +924,11 @@ export class MakerPointsEngine {
           `发现 ${unexpectedOrders.length} 个未预期挂单，执行强制取消`
         );
 
+        // 将所有订单添加到 pendingCancelOrders
+        for (const order of this.openOrders) {
+          this.pendingCancelOrders.add(String(order.orderId));
+        }
+
         // 强制取消所有挂单
         if (this.exchange.forceCancelAllOrders) {
           await this.exchange.forceCancelAllOrders();
@@ -806,7 +938,6 @@ export class MakerPointsEngine {
 
         // 重置本地状态
         this.openOrders = [];
-        this.pendingCancelOrders.clear();
         this.tradeLog.push("order", "已强制取消所有挂单，重置本地状态");
         return true;
       }
@@ -823,141 +954,74 @@ export class MakerPointsEngine {
     return false;
   }
 
-  /**
-   * 使用实时深度数据计算仓位的未实现盈亏
-   * 优先使用实时数据，回退到账户快照数据
-   */
-  private computeRealtimePnl(position: PositionSnapshot): number | null {
-    const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
-    // 使用实时深度计算 PnL
-    if (topBid != null && topAsk != null) {
-      return computePositionPnl(position, topBid, topAsk);
-    }
-    // 回退到账户推送的数据
-    if (Number.isFinite(position.unrealizedProfit)) {
-      return position.unrealizedProfit;
-    }
-    return null;
-  }
-
   private async checkStopLoss(): Promise<void> {
     if (this.stopLossProcessing) return;
     const lossLimit = Number(this.config.stopLossUsd);
     if (!Number.isFinite(lossLimit) || lossLimit <= 0) return;
     if (!this.accountSnapshot) return;
-
     const position = getPosition(this.accountSnapshot, this.config.symbol);
     const absPosition = Math.abs(position.positionAmt);
     if (absPosition < EPS) return;
-
-    // 使用实时计算的 PnL
-    const realtimePnl = this.computeRealtimePnl(position);
-    if (realtimePnl == null) return;
+    if (!Number.isFinite(position.unrealizedProfit)) return;
 
     const now = Date.now();
     if (now < this.stopLossCooldownUntil) return;
-    if (realtimePnl > -lossLimit) return;
+    if (position.unrealizedProfit > -lossLimit) return;
 
     this.stopLossProcessing = true;
-    // 不在这里设置冷却期，只有成功平仓后才设置
+    this.stopLossCooldownUntil = now + STOP_LOSS_COOLDOWN_MS;
     this.tradeLog.push(
       "stop",
-      `触发止损: 实时未实现亏损 ${realtimePnl.toFixed(4)} USDT`
+      `触发止损: 未实现亏损 ${position.unrealizedProfit.toFixed(4)} USDT`
     );
     this.notify({
       type: "stop_loss",
       level: "error",
       symbol: this.config.symbol,
       title: "止损触发",
-      message: `实时未实现亏损 ${realtimePnl.toFixed(4)} USDT，强制平仓`,
+      message: `未实现亏损 ${position.unrealizedProfit.toFixed(4)} USDT，强制平仓`,
       details: {
         side: position.positionAmt > 0 ? "LONG" : "SHORT",
         size: absPosition,
-        unrealizedPnl: realtimePnl,
+        unrealizedPnl: position.unrealizedProfit,
         lossLimit: -lossLimit,
       },
     });
-
-    // 循环重试止损，直到仓位为0
-    await this.executeStopLossWithRetry(position.positionAmt > 0 ? "SELL" : "BUY");
-  }
-
-  /**
-   * 执行止损平仓，失败后自动重试直到仓位为0
-   */
-  private async executeStopLossWithRetry(side: "BUY" | "SELL"): Promise<void> {
-    const maxRetries = 10;
-    let retryCount = 0;
-
     try {
-      while (retryCount < maxRetries) {
-        // 每次重试前重新检查仓位
-        const currentPosition = getPosition(this.accountSnapshot, this.config.symbol);
-        const currentAbsPosition = Math.abs(currentPosition.positionAmt);
-
-        // 仓位已清零，止损成功
-        if (currentAbsPosition < EPS) {
-          this.tradeLog.push("stop", "止损成功: 仓位已清零");
-          this.stopLossCooldownUntil = Date.now() + STOP_LOSS_COOLDOWN_MS;
-          break;
-        }
-
-        try {
-          // 强制解锁 MARKET 类型，确保不被之前的操作阻塞
-          unlockOperating(this.locks, this.timers, this.pending, "MARKET");
-
-          // 先取消所有挂单
-          await this.flushOrders();
-
-          // 执行市价平仓
-          await marketClose(
-            this.exchange,
-            this.config.symbol,
-            this.openOrders,
-            this.locks,
-            this.timers,
-            this.pending,
-            side,
-            currentAbsPosition,
-            (type, detail) => this.tradeLog.push(type, detail),
-            undefined,
-            { qtyStep: this.qtyStep }
-          );
-
-          // 等待一小段时间让账户数据更新
-          await this.sleep(STOP_LOSS_RETRY_INTERVAL_MS);
-
-        } catch (error) {
-          retryCount++;
-          if (isUnknownOrderError(error)) {
-            this.tradeLog.push("order", "止损平仓时订单已不存在，继续检查仓位");
-          } else if (isPrecisionError(error)) {
-            this.tradeLog.push("warn", `止损平仓精度错误，重新同步: ${extractMessage(error)}`);
-            this.syncPrecision(true);
-          } else {
-            this.tradeLog.push("error", `止损平仓失败 (重试 ${retryCount}/${maxRetries}): ${extractMessage(error)}`);
-          }
-
-          // 失败后等待一段时间再重试
-          if (retryCount < maxRetries) {
-            await this.sleep(STOP_LOSS_RETRY_INTERVAL_MS);
-          }
-        }
-      }
-
-      if (retryCount >= maxRetries) {
-        this.tradeLog.push("error", `止损重试已达上限 (${maxRetries} 次)，请手动检查仓位`);
-        // 达到重试上限后设置冷却期，避免持续重试
-        this.stopLossCooldownUntil = Date.now() + STOP_LOSS_COOLDOWN_MS;
+      await this.flushOrders();
+      await marketClose(
+        this.exchange,
+        this.config.symbol,
+        this.openOrders,
+        this.locks,
+        this.timers,
+        this.pending,
+        position.positionAmt > 0 ? "SELL" : "BUY",
+        absPosition,
+        (type, detail) => this.tradeLog.push(type, detail),
+        undefined,
+        { qtyStep: this.qtyStep }
+      );
+    } catch (error) {
+      if (isUnknownOrderError(error)) {
+        this.tradeLog.push("order", "止损平仓时订单已不存在");
+      } else if (isPrecisionError(error)) {
+        this.tradeLog.push("warn", `止损平仓精度错误，重新同步: ${extractMessage(error)}`);
+        this.syncPrecision(true);
+      } else {
+        this.tradeLog.push("error", `止损平仓失败: ${extractMessage(error)}`);
       }
     } finally {
       this.stopLossProcessing = false;
+        
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        const pnl = position.unrealizedProfit || 0;
+        const positionAmt = position.positionAmt || 0;
+        const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     }
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private async flushOrders(): Promise<void> {
@@ -1294,6 +1358,11 @@ export class MakerPointsEngine {
 
     if (!this.tokenExpiryCancelDone && this.openOrders.length > 0) {
       try {
+        // 将所有订单添加到 pendingCancelOrders
+        for (const order of this.openOrders) {
+          this.pendingCancelOrders.add(String(order.orderId));
+        }
+        
         await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
         this.tradeLog.push("order", "Token 过期，已撤销所有挂单");
         this.openOrders = [];

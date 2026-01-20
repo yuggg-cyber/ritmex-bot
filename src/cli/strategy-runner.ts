@@ -12,6 +12,7 @@ import { BasisArbEngine, type BasisArbSnapshot } from "../strategy/basis-arb-eng
 import { GridEngine, type GridEngineSnapshot } from "../strategy/grid-engine";
 import { extractMessage } from "../utils/errors";
 import type { StrategyId } from "./args";
+import { initStatsSystem } from "../stats_system";
 
 interface RunnerOptions {
   silent?: boolean;
@@ -31,6 +32,8 @@ export const STRATEGY_LABELS: Record<StrategyId, string> = {
 };
 
 export async function startStrategy(strategyId: StrategyId, options: RunnerOptions = {}): Promise<void> {
+  initStatsSystem();
+  
   const runner = STRATEGY_FACTORIES[strategyId];
   if (!runner) {
     throw new Error(`Unsupported strategy: ${strategyId}`);

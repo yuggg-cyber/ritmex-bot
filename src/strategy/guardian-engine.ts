@@ -9,6 +9,7 @@ import {
 } from "../utils/strategy";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import {
   placeStopLossOrder,
   placeTrailingStopOrder,
@@ -45,6 +46,7 @@ type GuardianEngineListener = (snapshot: GuardianEngineSnapshot) => void;
 export class GuardianEngine {
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
   private tickerSnapshot: AsterTicker | null = null;
 
   private readonly locks: OrderLockMap = {};
@@ -105,6 +107,12 @@ export class GuardianEngine {
       this.exchange.watchAccount.bind(this.exchange),
       (snapshot) => {
         this.accountSnapshot = snapshot;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -131,6 +139,15 @@ export class GuardianEngine {
                 isActive(order.status)
             )
           : [];
+        
+        const currentIds = new Set(this.openOrders.map(o => String(o.orderId)));
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            collector.logFill();
+          }
+        }
+        this.prevActiveIds = currentIds;
+        
         this.ordersSnapshotReady = true;
         this.emitUpdate();
       },
@@ -145,6 +162,12 @@ export class GuardianEngine {
       this.exchange.watchTicker.bind(this.exchange, this.config.symbol),
       (ticker) => {
         this.tickerSnapshot = ticker;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -183,6 +206,12 @@ export class GuardianEngine {
       this.tradeLog.push("error", t("log.guardian.executeError", { error: extractMessage(error) }));
     } finally {
       this.processing = false;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     }
   }

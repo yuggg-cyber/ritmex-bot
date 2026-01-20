@@ -15,7 +15,7 @@ import { getPosition, parseSymbolParts } from "../utils/strategy";
 import type { PositionSnapshot } from "../utils/strategy";
 import { computeDepthStats } from "../utils/depth";
 import { computePositionPnl } from "../utils/pnl";
-import { getTopPrices, getPricesAtLevel, getMidOrLast } from "../utils/price";
+import { getTopPrices, getMidOrLast } from "../utils/price";
 import { shouldStopLoss } from "../utils/risk";
 import {
   marketClose,
@@ -29,6 +29,7 @@ import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { SessionVolumeTracker } from "./common/session-volume";
 
 interface DesiredOrder {
@@ -62,6 +63,7 @@ export class OffsetMakerEngine {
   private lastKline: AsterKline | null = null;
   private liveCandle: { startMs: number; open: number; close: number } | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
 
   private readonly locks: OrderLockMap = {};
   private readonly timers: OrderTimerMap = {};
@@ -198,6 +200,12 @@ export class OffsetMakerEngine {
           position.entryPrice = this.spotEntryPrice;
         }
         this.sessionVolume.update(position, this.getReferencePrice());
+        
+        const pnl = position?.unrealizedPnl || 0;
+        const positionAmt = position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -221,6 +229,14 @@ export class OffsetMakerEngine {
             )
           : [];
         const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
+        
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            collector.logFill();
+          }
+        }
+        this.prevActiveIds = currentIds;
+        
         for (const id of Array.from(this.pendingCancelOrders)) {
           if (!currentIds.has(id)) {
             this.pendingCancelOrders.delete(id);
@@ -356,18 +372,10 @@ export class OffsetMakerEngine {
 
       // 直接使用orderbook价格，格式化为字符串避免精度问题
       const priceDecimals = this.getPriceDecimals();
-      // 平仓价格始终使用买1/卖1
       const closeBidPrice = formatPriceToString(finalBid, priceDecimals);
       const closeAskPrice = formatPriceToString(finalAsk, priceDecimals);
-
-      // 开仓价格根据 entryDepthLevel 使用指定档位
-      const entryLevel = this.config.entryDepthLevel ?? 1;
-      const { bidAtLevel: entryBid, askAtLevel: entryAsk } = getPricesAtLevel(latestDepth, entryLevel);
-      const entryBidBase = entryBid ?? finalBid;
-      const entryAskBase = entryAsk ?? finalAsk;
-
-      const rawBidPrice = entryBidBase - this.config.bidOffset;
-      const rawAskPrice = entryAskBase + this.config.askOffset;
+      const rawBidPrice = finalBid - this.config.bidOffset;
+      const rawAskPrice = finalAsk + this.config.askOffset;
       const safeBid = this.ensureMakerPrice("BUY", rawBidPrice, finalBid, finalAsk);
       const safeAsk = this.ensureMakerPrice("SELL", rawAskPrice, finalBid, finalAsk);
       const bidPrice = safeBid != null ? formatPriceToString(safeBid, priceDecimals) : null;

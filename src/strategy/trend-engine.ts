@@ -34,6 +34,7 @@ import { isRateLimitError } from "../utils/errors";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { t } from "../i18n";
 
@@ -70,6 +71,7 @@ type TrendEngineListener = (snapshot: TrendEngineSnapshot) => void;
 export class TrendEngine {
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
   private depthSnapshot: AsterDepth | null = null;
   private tickerSnapshot: AsterTicker | null = null;
   private klineSnapshot: AsterKline[] = [];
@@ -172,6 +174,12 @@ export class TrendEngine {
         const reference = this.getReferencePrice();
         this.sessionVolume.update(position, reference);
         this.trackPositionLifecycle(position, reference);
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -197,6 +205,14 @@ export class TrendEngine {
             )
           : [];
         const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
+        
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            collector.logFill();
+          }
+        }
+        this.prevActiveIds = currentIds;
+        
         for (const id of Array.from(this.pendingCancelOrders)) {
           if (!currentIds.has(id)) {
             this.pendingCancelOrders.delete(id);
@@ -206,6 +222,12 @@ export class TrendEngine {
           this.cancelAllRequested = false;
         }
         this.ordersSnapshotReady = true;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -219,6 +241,12 @@ export class TrendEngine {
       this.exchange.watchDepth.bind(this.exchange, this.config.symbol),
       (depth) => {
         this.depthSnapshot = depth;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -232,6 +260,12 @@ export class TrendEngine {
       this.exchange.watchTicker.bind(this.exchange, this.config.symbol),
       (ticker) => {
         this.tickerSnapshot = ticker;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -248,6 +282,12 @@ export class TrendEngine {
         const latestSma = getSMA(this.klineSnapshot, 30);
         this.lastSma30 = latestSma;
         this.logKlineSnapshot();
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       },
       log,
@@ -317,6 +357,12 @@ export class TrendEngine {
     try {
       const decision = this.rateLimit.beforeCycle();
       if (decision === "paused") {
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return;
       }
@@ -324,10 +370,22 @@ export class TrendEngine {
         return;
       }
       if (!this.ordersSnapshotReady) {
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return;
       }
       if (!this.isReady()) {
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
         return;
       }
@@ -361,6 +419,12 @@ export class TrendEngine {
       this.trackPositionLifecycle(position, price);
       this.lastSma30 = sma30;
       this.lastPrice = price;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     } catch (error) {
       if (isRateLimitError(error)) {
@@ -371,6 +435,12 @@ export class TrendEngine {
       } else {
         this.tradeLog.push("error", t("log.trend.loopError", { error: String(error) }));
       }
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     } finally {
       try {

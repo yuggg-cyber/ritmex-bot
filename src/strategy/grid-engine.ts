@@ -16,6 +16,7 @@ import {
 } from "../core/order-coordinator";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 
 interface DesiredGridOrder {
   level: number;
@@ -278,6 +279,12 @@ export class GridEngine {
       (snapshot) => {
         this.accountSnapshot = snapshot;
         this.position = getPosition(snapshot, this.config.symbol);
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.accountVersion += 1;
         this.lastAbsPositionAmt = Math.abs(this.position.positionAmt);
         if (!this.feedArrived.account) {
@@ -302,6 +309,15 @@ export class GridEngine {
         this.openOrders = Array.isArray(orders)
           ? orders.filter((order) => order.symbol === this.config.symbol)
           : [];
+        
+        const currentIds = new Set(this.openOrders.map(o => String(o.orderId)));
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            collector.logFill();
+          }
+        }
+        this.prevActiveIds = currentIds;
+        
         this.synchronizeLocks(orders);
         this.ordersVersion += 1;
         if (!this.feedArrived.orders) {

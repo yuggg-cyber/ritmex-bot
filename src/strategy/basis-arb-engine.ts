@@ -5,6 +5,7 @@ import { AsterSpotRestClient, AsterRestClient } from "../exchanges/aster/client"
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { t } from "../i18n";
 
 export interface BasisArbSnapshot {
@@ -93,6 +94,7 @@ export class BasisArbEngine {
   private readonly funding: FundingState = { rate: null, nextFundingTime: null, updatedAt: null };
   private spotBalances: SpotBalanceStateEntry[] = [];
   private futuresBalances: FuturesBalanceStateEntry[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
 
   private readonly feedReady = { futures: false, spot: false, funding: false };
 
@@ -229,6 +231,12 @@ export class BasisArbEngine {
     if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
       this.marketReadyAt = this.now();
     }
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
     this.emitUpdate();
   }
 
@@ -267,6 +275,12 @@ export class BasisArbEngine {
           this.feedReady.funding = true;
           this.tradeLog.push("info", t("log.basis.fundingReady", { symbol: this.config.futuresSymbol }));
         }
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
         this.emitUpdate();
       }
     } catch (error) {
@@ -299,6 +313,12 @@ export class BasisArbEngine {
       }
       next.sort((a, b) => a.asset.localeCompare(b.asset));
       this.spotBalances = next;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     } catch (error) {
       this.tradeLog.push(
@@ -330,6 +350,12 @@ export class BasisArbEngine {
       }
       next.sort((a, b) => a.asset.localeCompare(b.asset));
       this.futuresBalances = next;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
       this.emitUpdate();
     } catch (error) {
       this.tradeLog.push(
@@ -357,6 +383,12 @@ export class BasisArbEngine {
     if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
       this.marketReadyAt = this.now();
     }
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
     this.emitUpdate();
   }
 
@@ -379,6 +411,12 @@ export class BasisArbEngine {
     if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
       this.marketReadyAt = this.now();
     }
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
     this.emitUpdate();
   }
 
@@ -392,6 +430,12 @@ export class BasisArbEngine {
       this.feedReady.funding = true;
       this.tradeLog.push("info", t("log.basis.fundingReady", { symbol: this.config.futuresSymbol }));
     }
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
     this.emitUpdate();
   }
 
@@ -421,6 +465,12 @@ export class BasisArbEngine {
     futuresBalances.sort((a, b) => a.asset.localeCompare(b.asset));
     this.spotBalances = spotBalances;
     this.futuresBalances = futuresBalances;
+        
+        const pnl = this.position?.unrealizedPnl || 0;
+        const positionAmt = this.position?.positionAmt || 0;
+        const balance = snapshot.totalWalletBalance || 0;
+        collector.updateSnapshot(pnl, positionAmt, balance);
+        
     this.emitUpdate();
   }
 
