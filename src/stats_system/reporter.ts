@@ -30,15 +30,15 @@ class StatsReporter {
       this.heartbeatUrl = url.toString();
     }
 
+    // 先初始化 StandX 积分收集器（必须在 schedulePointsReport 之前）
+    standxCollector.init();
+
     if (this.enabled && this.serverUrl) {
       this.scheduleReport();
       this.scheduleHeartbeat();
       this.schedulePointsReport();
       console.log("[StatsReporter] 已启用，Server URL: " + this.serverUrl);
     }
-    
-    // 初始化 StandX 积分收集器
-    standxCollector.init();
   }
 
   /**
