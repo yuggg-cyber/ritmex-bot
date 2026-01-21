@@ -65,6 +65,7 @@ export class BinanceDepthTracker {
       baseUrl?: string;
       levels?: number;
       ratio?: number;
+      speedMs?: number;
       logger?: (context: string, error: unknown) => void;
     }
   ) {}
@@ -229,7 +230,9 @@ export class BinanceDepthTracker {
 
   private buildUrl(): string {
     const base = this.options?.baseUrl ?? DEFAULT_BASE_URL;
-    const stream = `${this.symbol.toLowerCase()}@depth10@100ms`;
+    const levels = this.options?.levels ?? 10;
+    const speed = this.options?.speedMs ?? 100;
+    const stream = `${this.symbol.toLowerCase()}@depth${levels}@${speed}ms`;
     return `${base}/${stream}`;
   }
 

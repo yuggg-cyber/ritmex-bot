@@ -71,6 +71,13 @@ export interface MakerPointsSnapshot {
     binance: boolean;
   };
   binanceDepth: BinanceDepthSnapshot | null;
+  bandDepths: Array<{
+    band: "0-10" | "10-30" | "30-100";
+    bps: number;
+    buyDepth: number | null;
+    sellDepth: number | null;
+    enabled: boolean;
+  }>;
   quoteStatus: {
     closeOnly: boolean;
     skipBuy: boolean;
@@ -184,8 +191,9 @@ export class MakerPointsEngine {
     this.qtyStep = Math.max(1e-9, this.config.qtyStep);
     this.binanceDepth = new BinanceDepthTracker(resolveBinanceSymbol(this.config.symbol), {
       baseUrl: process.env.BINANCE_WS_URL,
-      levels: 10,
-      ratio: 3,
+      levels: 20,
+      ratio: 5,
+      speedMs: 500,
       logger: (context, error) => {
         this.tradeLog.push("warn", `Binance ${context} 异常: ${extractMessage(error)}`);
       },
@@ -1190,6 +1198,7 @@ export class MakerPointsEngine {
     const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
     const spread = topBid != null && topAsk != null ? topAsk - topBid : null;
     const pnl = computePositionPnl(position, topBid, topAsk);
+    const bandDepths = this.computeBandDepths(topBid, topAsk);
 
     return {
       ready: this.isReady(),
@@ -1208,12 +1217,33 @@ export class MakerPointsEngine {
       lastUpdated: Date.now(),
       feedStatus: { ...this.feedStatus },
       binanceDepth: this.binanceDepth.getSnapshot(),
+      bandDepths,
       quoteStatus: {
         closeOnly: this.lastCloseOnly,
         skipBuy: this.lastSkipBuy,
         skipSell: this.lastSkipSell,
       },
     };
+  }
+
+  private computeBandDepths(topBid: number | null, topAsk: number | null): MakerPointsSnapshot["bandDepths"] {
+    const bands: MakerPointsSnapshot["bandDepths"] = [
+      { band: "0-10", bps: 9, buyDepth: null, sellDepth: null, enabled: this.config.enableBand0To10 },
+      { band: "10-30", bps: 29, buyDepth: null, sellDepth: null, enabled: this.config.enableBand10To30 },
+      { band: "30-100", bps: 99, buyDepth: null, sellDepth: null, enabled: this.config.enableBand30To100 },
+    ];
+
+    if (!this.depthSnapshot || topBid == null || topAsk == null) {
+      return bands;
+    }
+
+    return bands.map((band) => {
+      const buyPrice = topBid * (1 - band.bps / 10000);
+      const sellPrice = topAsk * (1 + band.bps / 10000);
+      const buyDepth = getDepthBetweenPrices(this.depthSnapshot, "BUY", buyPrice);
+      const sellDepth = getDepthBetweenPrices(this.depthSnapshot, "SELL", sellPrice);
+      return { ...band, buyDepth, sellDepth };
+    });
   }
 
   private getReferencePrice(): number | null {
