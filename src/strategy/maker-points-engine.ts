@@ -13,7 +13,7 @@ import { isOrderActiveStatus } from "../utils/order-status";
 import { getPosition, parseSymbolParts } from "../utils/strategy";
 import type { PositionSnapshot } from "../utils/strategy";
 import { computePositionPnl } from "../utils/pnl";
-import { getMidOrLast, getTopPrices } from "../utils/price";
+import { getDepthBetweenPrices, getMidOrLast, getTopPrices } from "../utils/price";
 import {
   marketClose,
   placeOrder,
@@ -124,6 +124,8 @@ export class MakerPointsEngine {
   private lastSkipSell = false;
   private lastQuoteBid1: number | null = null;
   private lastQuoteAsk1: number | null = null;
+  // 跟踪各档位深度是否足够的状态 (按 bps 值索引)
+  private lastDepthOkStatus: Record<number, { buy: boolean; sell: boolean }> = {};
 
   private readinessLogged = {
     account: false,
@@ -585,11 +587,13 @@ export class MakerPointsEngine {
       const closeOnlyChanged = closeOnly !== prevCloseOnly;
       const skipChanged = skipBuy !== prevSkipBuy || skipSell !== prevSkipSell;
       const repriceNeeded = closeOnly ? true : this.shouldReprice(topBid, topAsk);
+      const depthStatusChanged = this.checkDepthStatusChanged(depth, topBid, topAsk);
       const shouldRecompute =
         closeOnly ||
         repriceNeeded ||
         closeOnlyChanged ||
         skipChanged ||
+        depthStatusChanged ||
         this.desiredOrders.length === 0;
 
       const desired = shouldRecompute
@@ -600,6 +604,7 @@ export class MakerPointsEngine {
               ask1: topAsk,
               skipBuy,
               skipSell,
+              depth,
             })
         : this.desiredOrders;
 
@@ -651,8 +656,9 @@ export class MakerPointsEngine {
     ask1: number;
     skipBuy: boolean;
     skipSell: boolean;
+    depth: AsterDepth | null;
   }): DesiredOrder[] {
-    const { bid1, ask1, skipBuy, skipSell } = params;
+    const { bid1, ask1, skipBuy, skipSell, depth } = params;
 
     const targets = buildBpsTargets({
       band0To10: this.config.enableBand0To10,
@@ -664,6 +670,7 @@ export class MakerPointsEngine {
 
     const priceDecimals = this.getPriceDecimals();
     const desired: DesiredOrder[] = [];
+    const minDepth = this.config.filterMinDepth;
 
     const getAmountForBps = (bps: number): number => {
       if (bps <= 10) return Number(this.config.band0To10Amount);
@@ -675,31 +682,107 @@ export class MakerPointsEngine {
       const amount = getAmountForBps(bps);
       if (!Number.isFinite(amount) || amount <= 0) continue;
 
+      // 所有档位都检查深度
+      const shouldCheckDepth = minDepth > 0;
+
       if (!skipBuy) {
         const price = bid1 * (1 - bps / 10000);
         if (Number.isFinite(price) && price > 0) {
-          desired.push({
-            side: "BUY",
-            price: formatPriceToString(price, priceDecimals),
-            amount,
-            reduceOnly: false,
-          });
+          if (shouldCheckDepth) {
+            const depthQty = getDepthBetweenPrices(depth, "BUY", price);
+            if (depthQty < minDepth) {
+              this.logThinDepthSkip("BUY", bps, depthQty, minDepth);
+            } else {
+              this.resetThinDepthSkip("BUY", bps);
+              desired.push({
+                side: "BUY",
+                price: formatPriceToString(price, priceDecimals),
+                amount,
+                reduceOnly: false,
+              });
+            }
+          } else {
+            desired.push({
+              side: "BUY",
+              price: formatPriceToString(price, priceDecimals),
+              amount,
+              reduceOnly: false,
+            });
+          }
         }
       }
       if (!skipSell) {
         const price = ask1 * (1 + bps / 10000);
         if (Number.isFinite(price) && price > 0) {
-          desired.push({
-            side: "SELL",
-            price: formatPriceToString(price, priceDecimals),
-            amount,
-            reduceOnly: false,
-          });
+          if (shouldCheckDepth) {
+            const depthQty = getDepthBetweenPrices(depth, "SELL", price);
+            if (depthQty < minDepth) {
+              this.logThinDepthSkip("SELL", bps, depthQty, minDepth);
+            } else {
+              this.resetThinDepthSkip("SELL", bps);
+              desired.push({
+                side: "SELL",
+                price: formatPriceToString(price, priceDecimals),
+                amount,
+                reduceOnly: false,
+              });
+            }
+          } else {
+            desired.push({
+              side: "SELL",
+              price: formatPriceToString(price, priceDecimals),
+              amount,
+              reduceOnly: false,
+            });
+          }
         }
       }
     }
 
     return desired;
+  }
+
+  /**
+   * 检查各档位的深度状态是否发生变化
+   * 当深度从足够变为不足，或从不足变为足够时，需要触发重新计算
+   */
+  private checkDepthStatusChanged(
+    depth: AsterDepth | null,
+    bid1: number,
+    ask1: number
+  ): boolean {
+    const minDepth = this.config.filterMinDepth;
+    if (minDepth <= 0) return false;
+
+    // 获取启用的所有档位
+    const targets = buildBpsTargets({
+      band0To10: this.config.enableBand0To10,
+      band10To30: this.config.enableBand10To30,
+      band30To100: this.config.enableBand30To100,
+    });
+
+    let changed = false;
+
+    for (const bps of targets) {
+      const buyPrice = bid1 * (1 - bps / 10000);
+      const sellPrice = ask1 * (1 + bps / 10000);
+
+      const buyDepthQty = getDepthBetweenPrices(depth, "BUY", buyPrice);
+      const sellDepthQty = getDepthBetweenPrices(depth, "SELL", sellPrice);
+      const currentBuyOk = buyDepthQty >= minDepth;
+      const currentSellOk = sellDepthQty >= minDepth;
+
+      const lastStatus = this.lastDepthOkStatus[bps];
+      if (lastStatus) {
+        if (lastStatus.buy !== currentBuyOk || lastStatus.sell !== currentSellOk) {
+          changed = true;
+        }
+      }
+
+      this.lastDepthOkStatus[bps] = { buy: currentBuyOk, sell: currentSellOk };
+    }
+
+    return changed;
   }
 
   private buildCloseOnlyOrders(
@@ -1188,6 +1271,37 @@ export class MakerPointsEngine {
     if (summary !== this.lastDesiredSummary) {
       this.tradeLog.push("info", `目标挂单: ${summary}`);
       this.lastDesiredSummary = summary;
+    }
+  }
+
+  // 跟踪各档位的深度跳过状态 (按 bps 和 side 索引)
+  private thinDepthSkipStatus: Record<string, boolean> = {};
+
+  /**
+   * 记录因深度不足而跳过挂单的日志
+   * 使用状态跟踪避免重复日志
+   */
+  private logThinDepthSkip(side: "BUY" | "SELL", bps: number, depthQty: number, minDepth: number): void {
+    const key = `${side}_${bps}`;
+    const alreadySkipped = this.thinDepthSkipStatus[key];
+
+    if (!alreadySkipped) {
+      this.tradeLog.push(
+        "info",
+        `跳过 ${side} ${bps}bps 挂单: 深度 ${depthQty.toFixed(4)} BTC < ${minDepth} BTC`
+      );
+      this.thinDepthSkipStatus[key] = true;
+    }
+  }
+
+  /**
+   * 当深度恢复时重置跳过状态，允许下次再次记录
+   */
+  private resetThinDepthSkip(side: "BUY" | "SELL", bps: number): void {
+    const key = `${side}_${bps}`;
+    if (this.thinDepthSkipStatus[key]) {
+      this.tradeLog.push("info", `${side} ${bps}bps 深度恢复，继续挂单`);
+      this.thinDepthSkipStatus[key] = false;
     }
   }
 
