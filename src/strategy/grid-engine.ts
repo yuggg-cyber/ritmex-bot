@@ -324,6 +324,8 @@ export class GridEngine {
           this.feedArrived.orders = true;
           log("info", "订单快照已同步");
           // cancel all existing orders at startup per simplified rules
+          // 清空 prevActiveIds 避免撤单被误判为成交
+          this.prevActiveIds.clear();
           this.startupCancelPromise = this.cancelAllExistingOrdersOnStartup();
         }
         this.feedStatus.orders = true;
