@@ -893,6 +893,9 @@ export class MakerPointsEngine {
       return true;
     }
     try {
+      // 清空 prevActiveIds 避免撤单被误判为成交
+      this.prevActiveIds.clear();
+      
       // 将所有订单添加到 pendingCancelOrders
       for (const order of this.openOrders) {
         this.pendingCancelOrders.add(String(order.orderId));
@@ -1070,6 +1073,9 @@ export class MakerPointsEngine {
           "warn",
           `发现 ${unexpectedOrders.length} 个未预期挂单，执行强制取消`
         );
+
+        // 清空 prevActiveIds 避免撤单被误判为成交
+        this.prevActiveIds.clear();
 
         // 将所有订单添加到 pendingCancelOrders
         for (const order of this.openOrders) {
@@ -1536,6 +1542,9 @@ export class MakerPointsEngine {
 
     if (!this.tokenExpiryCancelDone && this.openOrders.length > 0) {
       try {
+        // 清空 prevActiveIds 避免撤单被误判为成交
+        this.prevActiveIds.clear();
+        
         // 将所有订单添加到 pendingCancelOrders
         for (const order of this.openOrders) {
           this.pendingCancelOrders.add(String(order.orderId));
@@ -1678,6 +1687,9 @@ export class MakerPointsEngine {
    */
   private async defenseCancelAllOrders(): Promise<void> {
     try {
+      // 清空 prevActiveIds 避免撤单被误判为成交
+      this.prevActiveIds.clear();
+      
       if (this.exchange.forceCancelAllOrders) {
         const success = await this.exchange.forceCancelAllOrders();
         if (success) {
