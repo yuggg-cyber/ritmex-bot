@@ -452,6 +452,9 @@ export class MakerPointsEngine {
     this._standxConnectionState = "connected";
     this.reconnectResetPending = true;
     this.tradeLog.push("info", `WebSocket 重连成功 (${symbol})，开始重连保护流程`);
+    
+    // 清空 prevActiveIds 避免断连期间的订单被误判为成交
+    this.prevActiveIds.clear();
 
     try {
       // 查询真实挂单状态
