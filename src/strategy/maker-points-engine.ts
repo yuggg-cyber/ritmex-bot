@@ -329,21 +329,24 @@ export class MakerPointsEngine {
             
             // 区分订单是被撤销还是被成交
             const rawOrder = Array.isArray(orders) ? orders.find(o => String(o.orderId) === prevId) : null;
+            
+            // 1. 主动撤单：只有在待撤单列表里的，才计入“撤单统计”
             if (this.pendingCancelOrders.has(prevId)) {
               collector.logCancelOrder();
-            } else if (rawOrder && (rawOrder.status === "CANCELED" || rawOrder.status === "EXPIRED" || rawOrder.status === "REJECTED")) {
-              // 核心修复：检查交易所返回的真实状态
-              collector.logCancelOrder();
-              this.tradeLog.push("info", `[修正] 检测到被动撤单/过期，ID:${prevId}，状态:${rawOrder.status}`);
-            } else {
-              // 保留疑点追踪日志，以便后续排查隐形误判
-              if (!rawOrder) {
-                 this.tradeLog.push("warn", `[疑点追踪] 判定成交但缺失原始数据! ID:${prevId}`);
-              } else if (rawOrder.status !== "FILLED") {
-                 this.tradeLog.push("warn", `[疑点追踪] 判定成交但状态非Filled! ID:${prevId} 状态:${rawOrder.status}`);
-              }
-              
+            } 
+            // 2. 真实成交：只有状态明确为 FILLED，才计入“成交统计”
+            else if (rawOrder && rawOrder.status === "FILLED") {
               collector.logFill();
+            }
+            // 3. 其他情况（被动过期、拒单、数据丢失、部分成交后取消等）：
+            //    既不计入撤单，也不计入成交（纯净模式，忽略噪音数据）
+            else {
+              // 仅记录日志供后台排查
+              if (!rawOrder) {
+                 this.tradeLog.push("warn", `[忽略] 订单数据缺失(不计入统计) ID:${prevId}`);
+              } else {
+                 this.tradeLog.push("warn", `[忽略] 订单被动失效(不计入统计) ID:${prevId} 状态:${rawOrder.status}`);
+              }
             }
           }
         }
