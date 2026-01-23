@@ -328,6 +328,7 @@ export class MakerPointsEngine {
             }
             
             // 区分订单是被撤销还是被成交
+            // 区分订单是被撤销还是被成交
             const rawOrder = Array.isArray(orders) ? orders.find(o => String(o.orderId) === prevId) : null;
             
             // 1. 主动撤单：只有在待撤单列表里的，才计入“撤单统计”
@@ -341,7 +342,7 @@ export class MakerPointsEngine {
             // 3. 其他情况（被动过期、拒单、数据丢失、部分成交后取消等）：
             //    既不计入撤单，也不计入成交（纯净模式，忽略噪音数据）
             else {
-              // 仅记录日志供后台排查
+              // 仅记录日志供后台排查，不再调用 collector 记账
               if (!rawOrder) {
                  this.tradeLog.push("warn", `[忽略] 订单数据缺失(不计入统计) ID:${prevId}`);
               } else {
