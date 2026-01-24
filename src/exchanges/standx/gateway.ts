@@ -1398,7 +1398,7 @@ export class StandxGateway {
     }
   }
 
-  private emitAccountSnapshot(): void {
+  private emitAccountSnapshot(updateTime?: number): void {
     const positions = Array.from(this.positions.values());
     const assets = Array.from(this.balances.values());
     const totalWalletBalance = assets.reduce((sum, asset) => sum + Number(asset.walletBalance ?? 0), 0);
@@ -1410,7 +1410,7 @@ export class StandxGateway {
       canTrade: true,
       canDeposit: true,
       canWithdraw: true,
-      updateTime: Date.now(),
+      updateTime: typeof updateTime === "number" && Number.isFinite(updateTime) && updateTime > 0 ? updateTime : Date.now(),
       totalWalletBalance: String(totalWalletBalance || 0),
       totalUnrealizedProfit: String(totalUnrealizedProfit || 0),
       positions,
@@ -1433,10 +1433,13 @@ export class StandxGateway {
         this.requestJson<StandxBalanceSnapshot>("/api/query_balance", { method: "GET" }),
         this.requestJson<StandxPosition[]>("/api/query_positions", { method: "GET" }),
       ]);
+      let restSnapshotTime = 0;
       if (Array.isArray(positions)) {
         for (const position of positions) {
           const mapped = this.mapPosition(position);
           this.positions.set(mapped.symbol, mapped);
+          const positionTime = toTimestamp(position.time ?? position.updated_at);
+          restSnapshotTime = Math.max(restSnapshotTime, positionTime);
         }
       }
       if (balance) {
@@ -1445,12 +1448,12 @@ export class StandxGateway {
           asset: token,
           walletBalance: String(balance.balance ?? "0"),
           availableBalance: String(balance.cross_available ?? balance.balance ?? "0"),
-          updateTime: Date.now(),
+          updateTime: restSnapshotTime > 0 ? restSnapshotTime : Date.now(),
           unrealizedProfit: String(balance.upnl ?? "0"),
         };
         this.balances.set(token, asset);
       }
-      this.emitAccountSnapshot();
+      this.emitAccountSnapshot(restSnapshotTime > 0 ? restSnapshotTime : undefined);
       return this.accountSnapshot;
     } catch (error) {
       this.logger("accountSnapshot", error);
@@ -1679,7 +1682,7 @@ export class StandxGateway {
       entryPrice: String(data.entry_price ?? "0"),
       unrealizedProfit: String(data.upnl ?? "0"),
       positionSide: "BOTH",
-      updateTime: toTimestamp(data.updated_at),
+      updateTime: toTimestamp(data.time ?? data.updated_at),
       leverage: data.leverage ? String(data.leverage) : undefined,
       marginType: data.margin_mode,
       liquidationPrice: data.liq_price ? String(data.liq_price) : undefined,
