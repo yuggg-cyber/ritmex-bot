@@ -24,6 +24,7 @@ export interface StandxPosition {
   leverage?: string;
   liq_price?: string;
   margin_mode?: string;
+  time?: string;
   updated_at?: string;
 }
 

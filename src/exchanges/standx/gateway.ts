@@ -8,6 +8,9 @@ import type {
   FundingRateListener,
   KlineListener,
   OrderListener,
+  RestHealthInfo,
+  RestHealthListener,
+  RestHealthState,
   TickerListener,
 } from "../adapter";
 import type {
@@ -62,6 +65,7 @@ const WS_HEARTBEAT_CHECK_INTERVAL = 30_000;
 const WS_DATA_STALE_THRESHOLD = 3000;
 // REST 轮询间隔（毫秒）- WS 断连或数据过时时的 REST 拉取间隔
 const REST_POLL_INTERVAL = 2000;
+const REST_ERROR_DEFENSE_THRESHOLD = 3;
 
 const SUPPORTED_QUOTES = ["USD", "USDT", "USDC", "DUSD"];
 
@@ -420,6 +424,10 @@ export class StandxGateway {
   private readonly virtualStops = new Map<string, VirtualStop>();
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
+  private readonly restHealthListeners = new Set<RestHealthListener>();
+  private restConsecutiveErrors = 0;
+  private restUnhealthy = false;
+  private restLastError: string | null = null;
   private fundingState = new Map<string, FundingState>();
 
   private marketWs: WebSocket | null = null;
@@ -556,6 +564,14 @@ export class StandxGateway {
 
   onConnectionEvent(listener: ConnectionEventListener): void {
     this.connectionListeners.add(listener);
+  }
+
+  onRestHealthEvent(listener: RestHealthListener): void {
+    this.restHealthListeners.add(listener);
+  }
+
+  offRestHealthEvent(listener: RestHealthListener): void {
+    this.restHealthListeners.delete(listener);
   }
 
   offConnectionEvent(listener: ConnectionEventListener): void {
@@ -1382,7 +1398,7 @@ export class StandxGateway {
     }
   }
 
-  private emitAccountSnapshot(): void {
+  private emitAccountSnapshot(updateTime?: number): void {
     const positions = Array.from(this.positions.values());
     const assets = Array.from(this.balances.values());
     const totalWalletBalance = assets.reduce((sum, asset) => sum + Number(asset.walletBalance ?? 0), 0);
@@ -1394,7 +1410,7 @@ export class StandxGateway {
       canTrade: true,
       canDeposit: true,
       canWithdraw: true,
-      updateTime: Date.now(),
+      updateTime: typeof updateTime === "number" && Number.isFinite(updateTime) && updateTime > 0 ? updateTime : Date.now(),
       totalWalletBalance: String(totalWalletBalance || 0),
       totalUnrealizedProfit: String(totalUnrealizedProfit || 0),
       positions,
@@ -1411,16 +1427,19 @@ export class StandxGateway {
     }
   }
 
-  private async refreshAccountSnapshot(): Promise<void> {
+  private async refreshAccountSnapshot(): Promise<AsterAccountSnapshot | null> {
     try {
       const [balance, positions] = await Promise.all([
         this.requestJson<StandxBalanceSnapshot>("/api/query_balance", { method: "GET" }),
         this.requestJson<StandxPosition[]>("/api/query_positions", { method: "GET" }),
       ]);
+      let restSnapshotTime = 0;
       if (Array.isArray(positions)) {
         for (const position of positions) {
           const mapped = this.mapPosition(position);
           this.positions.set(mapped.symbol, mapped);
+          const positionTime = toTimestamp(position.time ?? position.updated_at);
+          restSnapshotTime = Math.max(restSnapshotTime, positionTime);
         }
       }
       if (balance) {
@@ -1429,14 +1448,44 @@ export class StandxGateway {
           asset: token,
           walletBalance: String(balance.balance ?? "0"),
           availableBalance: String(balance.cross_available ?? balance.balance ?? "0"),
-          updateTime: Date.now(),
+          updateTime: restSnapshotTime > 0 ? restSnapshotTime : Date.now(),
           unrealizedProfit: String(balance.upnl ?? "0"),
         };
         this.balances.set(token, asset);
       }
-      this.emitAccountSnapshot();
+      this.emitAccountSnapshot(restSnapshotTime > 0 ? restSnapshotTime : undefined);
+      return this.accountSnapshot;
     } catch (error) {
       this.logger("accountSnapshot", error);
+      return null;
+    }
+  }
+
+  async queryAccountSnapshot(): Promise<AsterAccountSnapshot | null> {
+    return await this.refreshAccountSnapshot();
+  }
+
+  async changeMarginMode(symbol: string, marginMode: "isolated" | "cross"): Promise<void> {
+    if (!this.signer.hasKey()) {
+      throw new Error("StandX change_margin_mode requires STANDX_REQUEST_PRIVATE_KEY for signed requests");
+    }
+    const normalized = normalizeSymbol(symbol);
+    const response = await this.requestJson<{ code?: number; message?: string; request_id?: string }>(
+      "/api/change_margin_mode",
+      {
+        method: "POST",
+        body: {
+          symbol: normalized,
+          margin_mode: marginMode,
+        },
+        signed: true,
+        extraHeaders: {
+          "x-session-id": this.sessionId,
+        },
+      }
+    );
+    if (response && typeof response.code === "number" && response.code !== 0) {
+      throw new Error(response.message ?? "StandX change margin mode rejected");
     }
   }
 
@@ -1633,7 +1682,7 @@ export class StandxGateway {
       entryPrice: String(data.entry_price ?? "0"),
       unrealizedProfit: String(data.upnl ?? "0"),
       positionSide: "BOTH",
-      updateTime: toTimestamp(data.updated_at),
+      updateTime: toTimestamp(data.time ?? data.updated_at),
       leverage: data.leverage ? String(data.leverage) : undefined,
       marginType: data.margin_mode,
       liquidationPrice: data.liq_price ? String(data.liq_price) : undefined,
@@ -1708,22 +1757,70 @@ export class StandxGateway {
         }
       }
     }
-    const response = await fetch(url.toString(), {
-      method: options.method,
-      headers,
-      body: options.method === "GET" ? undefined : body,
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`${options.method} ${path} failed (${response.status}): ${text}`);
-    }
-    if (!text) {
-      return {} as T;
-    }
     try {
-      return JSON.parse(text) as T;
-    } catch {
-      return text as unknown as T;
+      const response = await fetch(url.toString(), {
+        method: options.method,
+        headers,
+        body: options.method === "GET" ? undefined : body,
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`${options.method} ${path} failed (${response.status}): ${text}`);
+      }
+      if (!text) {
+        this.recordRestSuccess();
+        return {} as T;
+      }
+      try {
+        const parsed = JSON.parse(text) as T;
+        this.recordRestSuccess();
+        return parsed;
+      } catch {
+        this.recordRestSuccess();
+        return text as unknown as T;
+      }
+    } catch (error) {
+      this.recordRestError({
+        consecutiveErrors: this.restConsecutiveErrors + 1,
+        method: options.method,
+        path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  private recordRestSuccess(): void {
+    if (this.restConsecutiveErrors === 0 && !this.restUnhealthy) return;
+    this.restConsecutiveErrors = 0;
+    this.restLastError = null;
+    if (!this.restUnhealthy) return;
+    this.restUnhealthy = false;
+    this.emitRestHealth("healthy", { consecutiveErrors: 0 });
+  }
+
+  private recordRestError(info: RestHealthInfo): void {
+    this.restConsecutiveErrors = Math.max(0, Number(info.consecutiveErrors) || 0);
+    this.restLastError = info.error ?? this.restLastError;
+
+    if (!this.restUnhealthy && this.restConsecutiveErrors >= REST_ERROR_DEFENSE_THRESHOLD) {
+      this.restUnhealthy = true;
+      this.emitRestHealth("unhealthy", {
+        consecutiveErrors: this.restConsecutiveErrors,
+        method: info.method,
+        path: info.path,
+        error: info.error ?? this.restLastError ?? undefined,
+      });
+    }
+  }
+
+  private emitRestHealth(state: RestHealthState, info: RestHealthInfo): void {
+    for (const listener of this.restHealthListeners) {
+      try {
+        listener(state, info);
+      } catch (error) {
+        this.logger("restHealthListener", error);
+      }
     }
   }
 

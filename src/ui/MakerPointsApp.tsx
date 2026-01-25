@@ -135,6 +135,7 @@ export function MakerPointsApp({ onExit }: MakerPointsAppProps) {
         ? t("offset.imbalance.sell")
         : t("offset.imbalance.balanced");
   const quoteMode = snapshot.quoteStatus.closeOnly ? t("makerPoints.mode.closeOnly") : t("makerPoints.mode.normal");
+  const formatDepth = (value: number | null) => (value == null ? "-" : formatNumber(value, 4));
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -164,6 +165,15 @@ export function MakerPointsApp({ onExit }: MakerPointsAppProps) {
             status: imbalanceLabel,
           })}
         </Text>
+        {snapshot.bandDepths.map((band) => (
+          <Text key={band.band} color={band.enabled ? undefined : "gray"}>
+            {t("makerPoints.bandDepthLine", {
+              band: band.band,
+              buy: formatDepth(band.buyDepth),
+              sell: formatDepth(band.sellDepth),
+            })}
+          </Text>
+        ))}
         <Text>
           {t("maker.dataStatus")}
           {feedEntries.map((entry, index) => (

@@ -202,6 +202,10 @@ const translations: Record<string, TranslationEntry> = {
     zh: "Binance 深度: 买10 {buy} ｜ 卖10 {sell} ｜ 状态: {status}",
     en: "Binance depth: bid10 {buy} | ask10 {sell} | Status: {status}",
   },
+  "makerPoints.bandDepthLine": {
+    zh: "StandX 档位 {band}bps 深度: 买 {buy} ｜ 卖 {sell}",
+    en: "StandX band {band}bps depth: buy {buy} | sell {sell}",
+  },
   "makerPoints.mode.closeOnly": { zh: "平仓", en: "Close only" },
   "makerPoints.mode.normal": { zh: "正常", en: "Normal" },
   "makerPoints.feed.binance": { zh: "Binance", en: "Binance" },
