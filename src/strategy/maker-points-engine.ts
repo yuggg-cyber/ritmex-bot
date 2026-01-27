@@ -113,6 +113,7 @@ export class MakerPointsEngine {
   private readonly timers: OrderTimerMap = {};
   private readonly pending: OrderPendingMap = {};
   private readonly pendingCancelOrders = new Set<string>();
+  private readonly loggedCancelOrders = new Set<string>();  // 防止撤单重复统计
 
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly events = new StrategyEventEmitter<MakerPointsEvent, MakerPointsSnapshot>();
@@ -336,9 +337,13 @@ export class MakerPointsEngine {
             // 区分订单是被撤销还是被成交
             const rawOrder = Array.isArray(orders) ? orders.find(o => String(o.orderId) === prevId) : null;
             
-            // 1. 主动撤单：只有在待撤单列表里的，才计入“撤单统计”
+            // 1. 主动撤单：只有在待撤单列表里的，才计入"撤单统计"
             if (this.pendingCancelOrders.has(prevId)) {
-              collector.logCancelOrder();
+              // 防止重复统计：检查是否已经为这个订单记录过撤单
+              if (!this.loggedCancelOrders.has(prevId)) {
+                collector.logCancelOrder();
+                this.loggedCancelOrders.add(prevId);  // 标记为已统计，防止重复
+              }
             } 
             // 2. 真实成交：只有状态明确为 FILLED，才计入“成交统计”
             else if (rawOrder && rawOrder.status === "FILLED") {
@@ -366,6 +371,9 @@ export class MakerPointsEngine {
         for (const id of Array.from(this.pendingCancelOrders)) {
           if (!currentIds.has(id)) {
             this.pendingCancelOrders.delete(id);
+            // 延迟清理已统计记录，给予足够的时间窗口避免重复统计
+            const idToClean = id;
+            setTimeout(() => this.loggedCancelOrders.delete(idToClean), 10000);
           }
         }
         this.initialOrderSnapshotReady = true;
