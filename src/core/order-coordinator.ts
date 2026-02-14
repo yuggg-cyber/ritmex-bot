@@ -9,6 +9,7 @@ import {
 } from "../exchanges/order-router";
 import { roundDownToTick, roundQtyDownToStep } from "../utils/math";
 import { isUnknownOrderError } from "../utils/errors";
+import { collector } from "../stats_system";
 import { isOrderPriceAllowedByMark } from "../utils/strategy";
 
 export type OrderLockMap = Record<string, boolean>;
@@ -117,6 +118,9 @@ export async function deduplicateOrders(
     lockOperating(locks, timers, pendings, type, log);
     await adapter.cancelOrders({ symbol, orderIdList });
     log("order", `去重撤销重复 ${type} 单: ${orderIdList.join(",")}`);
+    for (let i = 0; i < orderIdList.length; i++) {
+      collector.logCancelOrder();
+    }
   } catch (err) {
     if (isUnknownOrderError(err)) {
       log("order", "去重时发现订单已不存在，跳过删除");
@@ -183,6 +187,7 @@ export async function placeOrder(
     });
     pendings[type] = String(order.orderId);
     log("order", `挂限价单: ${side} @ ${priceNum} 数量 ${quantity} reduceOnly=${reduceOnly}${opts?.slPrice ? ` sl=${opts.slPrice}` : ""}`);
+    collector.logPlaceOrder();
     return order;
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);
@@ -233,6 +238,7 @@ export async function placeMarketOrder(
     });
     pendings[type] = String(order.orderId);
     log("order", `市价单: ${side} 数量 ${quantity} reduceOnly=${reduceOnly}`);
+    collector.logPlaceOrder();
     return order;
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);
@@ -300,6 +306,7 @@ export async function placeStopLossOrder(
     });
     pendings[type] = String(order.orderId);
     log("stop", `挂止损单: ${side} STOP_MARKET @ ${normalizedStop}`);
+    collector.logPlaceOrder();
     return order;
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);
@@ -361,6 +368,7 @@ export async function placeTrailingStopOrder(
       "order",
       `挂动态止盈单: ${side} activation=${normalizedActivation} callbackRate=${callbackRate}`
     );
+    collector.logPlaceOrder();
     return order;
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);

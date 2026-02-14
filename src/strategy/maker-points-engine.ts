@@ -25,6 +25,7 @@ import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { BinanceDepthTracker, type BinanceDepthSnapshot } from "./common/binance-depth";
 import { buildBpsTargets } from "./maker-points-logic";
@@ -106,6 +107,8 @@ export class MakerPointsEngine {
   private depthSnapshot: AsterDepth | null = null;
   private tickerSnapshot: AsterTicker | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
+  private readonly loggedCancelOrders = new Set<string>();
 
   private readonly locks: OrderLockMap = {};
   private readonly timers: OrderTimerMap = {};
@@ -220,6 +223,13 @@ export class MakerPointsEngine {
     this.binanceDepth.onUpdate(() => {
       this.feedStatus.binance = true;
       this.lastBinanceDepthTime = Date.now();
+
+      const position = getPosition(this.accountSnapshot, this.config.symbol);
+      const pnl = position.unrealizedProfit || 0;
+      const positionAmt = position.positionAmt || 0;
+      const balance = Number(this.accountSnapshot?.totalWalletBalance || 0);
+      collector.updateSnapshot(pnl, positionAmt, balance);
+
       this.emitUpdate();
     });
     // 监听 Binance 连接状态变化
@@ -323,9 +333,40 @@ export class MakerPointsEngine {
             )
           : [];
         const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
+
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            if (collector.isBaselineOrder(prevId)) {
+              continue;
+            }
+            const rawOrder = Array.isArray(orders) ? orders.find(o => String(o.orderId) === prevId) : null;
+            if (this.pendingCancelOrders.has(prevId)) {
+              if (!this.loggedCancelOrders.has(prevId)) {
+                collector.logCancelOrder();
+                this.loggedCancelOrders.add(prevId);
+              }
+            } else if (rawOrder && rawOrder.status === "FILLED") {
+              collector.logFill();
+            } else {
+              if (!rawOrder) {
+                this.tradeLog.push("warn", `[忽略] 订单数据缺失(不计入统计) ID:${prevId}`);
+              } else {
+                this.tradeLog.push("warn", `[忽略] 订单被动失效(不计入统计) ID:${prevId} 状态:${rawOrder.status}`);
+              }
+            }
+          }
+        }
+        this.prevActiveIds = currentIds;
+
+        if (!this.initialOrderSnapshotReady) {
+          collector.setBaselineOrders(Array.from(currentIds));
+        }
+
         for (const id of Array.from(this.pendingCancelOrders)) {
           if (!currentIds.has(id)) {
             this.pendingCancelOrders.delete(id);
+            const idToClean = id;
+            setTimeout(() => this.loggedCancelOrders.delete(idToClean), 10000);
           }
         }
         this.initialOrderSnapshotReady = true;
@@ -392,6 +433,12 @@ export class MakerPointsEngine {
     this.sessionVolume.update(position, this.getReferencePrice());
     this.detectPositionChange(position);
     this.feedStatus.account = true;
+
+    const pnl = position.unrealizedProfit || 0;
+    const positionAmt = position.positionAmt || 0;
+    const balance = Number(snapshot.totalWalletBalance || 0);
+    collector.updateSnapshot(pnl, positionAmt, balance);
+
     this.emitUpdate();
   }
 
@@ -581,6 +628,8 @@ export class MakerPointsEngine {
       this.forceTickRequested = false;
       const decision = forceRun ? "run" : this.rateLimit.beforeCycle();
       if (decision === "paused") {
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        collector.updateSnapshot(position.unrealizedProfit || 0, position.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
         this.emitUpdate();
         return;
       }
@@ -589,6 +638,8 @@ export class MakerPointsEngine {
       }
       if (!this.isReady()) {
         this.logReadinessBlockers();
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        collector.updateSnapshot(position.unrealizedProfit || 0, position.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
         this.emitUpdate();
         return;
       }
@@ -637,6 +688,8 @@ export class MakerPointsEngine {
 
       this.resetReadinessFlags();
       if (!(await this.ensureStartupOrderReset())) {
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        collector.updateSnapshot(position.unrealizedProfit || 0, position.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
         this.emitUpdate();
         return;
       }
@@ -645,6 +698,7 @@ export class MakerPointsEngine {
       const absPosition = Math.abs(position.positionAmt);
 
       if (await this.handleTokenExpiry(position, absPosition)) {
+        collector.updateSnapshot(position.unrealizedProfit || 0, position.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
         this.emitUpdate();
         return;
       }
@@ -652,6 +706,8 @@ export class MakerPointsEngine {
       const depth = this.depthSnapshot!;
       const { topBid, topAsk } = getTopPrices(depth);
       if (topBid == null || topAsk == null) {
+        const pos = getPosition(this.accountSnapshot, this.config.symbol);
+        collector.updateSnapshot(pos.unrealizedProfit || 0, pos.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
         this.emitUpdate();
         return;
       }
@@ -725,6 +781,7 @@ export class MakerPointsEngine {
       this.logDesiredOrders(desired);
       this.sessionVolume.update(position, this.getReferencePrice());
       await this.syncOrders(desired, closeOnly);
+      collector.updateSnapshot(position.unrealizedProfit || 0, position.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
       this.emitUpdate();
     } catch (error) {
       if (isRateLimitError(error)) {
@@ -734,6 +791,8 @@ export class MakerPointsEngine {
       } else {
         this.tradeLog.push("error", `MakerPoints 主循环异常: ${extractMessage(error)}`);
       }
+      const posErr = getPosition(this.accountSnapshot, this.config.symbol);
+      collector.updateSnapshot(posErr.unrealizedProfit || 0, posErr.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
       this.emitUpdate();
     } finally {
       this.rateLimit.onCycleComplete(hadRateLimit);
@@ -985,6 +1044,10 @@ export class MakerPointsEngine {
       this.pendingCancelOrders.clear();
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
       this.openOrders = [];
+      {
+        const position = getPosition(this.accountSnapshot, this.config.symbol);
+        collector.updateSnapshot(position.unrealizedProfit || 0, position.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
+      }
       this.emitUpdate();
       this.tradeLog.push("order", "启动时清理历史挂单");
       this.initialOrderResetDone = true;
@@ -994,6 +1057,10 @@ export class MakerPointsEngine {
         this.tradeLog.push("order", "历史挂单已消失，跳过启动清理");
         this.initialOrderResetDone = true;
         this.openOrders = [];
+        {
+          const position = getPosition(this.accountSnapshot, this.config.symbol);
+          collector.updateSnapshot(position.unrealizedProfit || 0, position.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
+        }
         this.emitUpdate();
         return true;
       }
@@ -1288,6 +1355,8 @@ export class MakerPointsEngine {
       }
     } finally {
       this.stopLossProcessing = false;
+      const position = getPosition(this.accountSnapshot, this.config.symbol);
+      collector.updateSnapshot(position.unrealizedProfit || 0, position.positionAmt || 0, Number(this.accountSnapshot?.totalWalletBalance || 0));
       this.emitUpdate();
     }
   }

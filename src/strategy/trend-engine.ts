@@ -34,6 +34,7 @@ import { isRateLimitError } from "../utils/errors";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { t } from "../i18n";
 
@@ -70,6 +71,7 @@ type TrendEngineListener = (snapshot: TrendEngineSnapshot) => void;
 export class TrendEngine {
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
   private depthSnapshot: AsterDepth | null = null;
   private tickerSnapshot: AsterTicker | null = null;
   private klineSnapshot: AsterKline[] = [];
@@ -172,6 +174,12 @@ export class TrendEngine {
         const reference = this.getReferencePrice();
         this.sessionVolume.update(position, reference);
         this.trackPositionLifecycle(position, reference);
+
+        const pnl = position?.unrealizedProfit || 0;
+        const positionAmt = position?.positionAmt || 0;
+        const balance = Number(snapshot.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+
         this.emitUpdate();
       },
       log,
@@ -197,6 +205,14 @@ export class TrendEngine {
             )
           : [];
         const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
+
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            collector.logFill();
+          }
+        }
+        this.prevActiveIds = currentIds;
+
         for (const id of Array.from(this.pendingCancelOrders)) {
           if (!currentIds.has(id)) {
             this.pendingCancelOrders.delete(id);

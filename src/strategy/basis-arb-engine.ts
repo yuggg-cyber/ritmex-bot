@@ -5,6 +5,7 @@ import { AsterSpotRestClient, AsterRestClient } from "../exchanges/aster/client"
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { collector } from "../stats_system";
 import { t } from "../i18n";
 
 export interface BasisArbSnapshot {
@@ -421,6 +422,10 @@ export class BasisArbEngine {
     futuresBalances.sort((a, b) => a.asset.localeCompare(b.asset));
     this.spotBalances = spotBalances;
     this.futuresBalances = futuresBalances;
+
+    const balance = futuresBalances.reduce((sum, b) => sum + b.wallet, 0);
+    collector.updateSnapshot(0, 0, balance);
+
     this.emitUpdate();
   }
 

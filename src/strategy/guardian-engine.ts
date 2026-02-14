@@ -19,6 +19,7 @@ import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { extractMessage, isUnknownOrderError } from "../utils/errors";
 import { formatPriceToString } from "../utils/math";
 import { computePositionPnl } from "../utils/pnl";
+import { collector } from "../stats_system";
 import { t } from "../i18n";
 
 export interface GuardianEngineSnapshot {
@@ -45,6 +46,7 @@ type GuardianEngineListener = (snapshot: GuardianEngineSnapshot) => void;
 export class GuardianEngine {
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private openOrders: AsterOrder[] = [];
+  private prevActiveIds: Set<string> = new Set<string>();
   private tickerSnapshot: AsterTicker | null = null;
 
   private readonly locks: OrderLockMap = {};
@@ -105,6 +107,13 @@ export class GuardianEngine {
       this.exchange.watchAccount.bind(this.exchange),
       (snapshot) => {
         this.accountSnapshot = snapshot;
+
+        const position = getPosition(snapshot, this.config.symbol);
+        const pnl = position?.unrealizedProfit || 0;
+        const positionAmt = position?.positionAmt || 0;
+        const balance = Number(snapshot.totalWalletBalance || 0);
+        collector.updateSnapshot(pnl, positionAmt, balance);
+
         this.emitUpdate();
       },
       log,
@@ -131,6 +140,14 @@ export class GuardianEngine {
                 isActive(order.status)
             )
           : [];
+        const currentIds = new Set(this.openOrders.map(o => String(o.orderId)));
+        for (const prevId of this.prevActiveIds) {
+          if (!currentIds.has(prevId)) {
+            collector.logFill();
+          }
+        }
+        this.prevActiveIds = currentIds;
+
         this.ordersSnapshotReady = true;
         this.emitUpdate();
       },
